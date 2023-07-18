@@ -1,0 +1,5 @@
+*.dsk
+*.bin
+disk/**
+source/**
+**/.DS_Store
