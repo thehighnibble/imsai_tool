@@ -11,8 +11,7 @@
 #       python3
 #
 #   TODO:
-#       - make file paths platform independent
-#       - make target folder for disk directories either PWD or an argumant
+#       - make target folder for disk directories either PWD or an argumant or the image name
 #
 #   known issues:
 #       - TBD
@@ -105,6 +104,8 @@ def main():
 
     image = open(args[0], "rb")
 
+    root = 'disk'
+
     # print(dpb)
 
     boot = image.read(dpb['offset'] * dpb['sectors'] * SEC_SZ)
@@ -130,15 +131,15 @@ def main():
     dir = parseDir(dirData)
     printDir(dir)
 
-    os.mkdir('disk')
+    os.mkdir(root)
     if boot[0] != DEL_BYTE:
-        bf = open('disk/$BOOT', 'wb')
+        bf = open(os.path.join(root, '$BOOT'), 'wb')
         bf.write(boot)
         bf.close()
 
     for u in range(16):
         if dir[u] != {}:
-            os.mkdir(f'disk/{u}')
+            os.mkdir(os.path.join(root, f'{u}'))
             if dir[u] != { }:
                 for f in dir[u]:
                     fn = f.split('.',1)
@@ -146,7 +147,7 @@ def main():
                     fn[1] = fn[1].strip()
                     fn = '.'.join(fn)
 
-                    file = open(f'disk/{u}/{fn}','ab')
+                    file = open(os.path.join(root, f'{u}', fn),'ab')
 
                     recs = dir[u][f]['recs']
 

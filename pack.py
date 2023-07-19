@@ -11,8 +11,7 @@
 #       python3
 #
 #   TODO:
-#       - make file paths platform independent
-#       - make source folder for disk directories either PWD or an argumant
+#       - make source folder for disk directories either PWD or an argumant or the image name
 #
 #   known issues:
 #       - TBD
@@ -118,7 +117,9 @@ def main():
     args = sys.argv[1:]
     print (args)
 
-    d = os.scandir('source')
+    root = 'source'
+
+    d = os.scandir(root)
 
     dirdata = [ DEL_BYTE ] * (EXT_SZ * dpb['dirsize'])
     dirI = 0
@@ -149,7 +150,7 @@ def main():
 
             print(f"{i.name:12} <DIR> {outcome}")
 
-            subd = os.path.join('source', i.name)
+            subd = os.path.join(root, i.name)
             sd = os.scandir(subd)
 
             for f in sd:
@@ -212,7 +213,7 @@ def main():
 
     #WRITE BOOT TRACKS
     if boot:
-        bootfile = open('source/$BOOT', 'rb');
+        bootfile = open(os.path.join(root, '$BOOT'), 'rb');
         bootdata = bootfile.read(dpb['sectors'] * dpb['offset'] * SEC_SZ)
         disk.seek(0)
         disk.write(bootdata)
@@ -242,7 +243,7 @@ def main():
                 fn[1] = fn[1].strip()
                 fn = '.'.join(fn)
 
-                file = open(f'source/{u}/{fn}','rb')
+                file = open(os.path.join(root, f'{u}', fn),'rb')
                 fsec = 0
 
                 recs = dir[u][f]['recs']
