@@ -1,5 +1,5 @@
 *.dsk
 *.bin
-disk/**
+*.unpacked/**
 source/**
 **/.DS_Store
