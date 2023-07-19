@@ -13,6 +13,10 @@
 #       simple_http_server (module) - to install, use: pip install simple_http_server
 #
 #   TODO:
+#       - get disk map from a file or the command line
+#       - allow with image.dsk for imageDir and serve accordingly 
+#           ie. integrate both solutions
+#           and maintain multipole directories
 #       - add more error detection and return more error codes
 #
 #   known issues:
@@ -62,9 +66,12 @@ def main():
     dir = parseDir(bytearray(dirdata))
     # printDir(dir)
 
-    sys_get = requests.patch(f'{hosturl}/io?p=-{FIF_PORT:02X}', data=_srvurl)
-    if sys_get.status_code == 200:
-        print(f'Listening and registered on Port {FIF_PORT:02X}h to {sys_get.text}')
+    try:
+        sys_get = requests.patch(f'{hosturl}/io?p=-{FIF_PORT:02X}', data=_srvurl)
+        if sys_get.status_code == 200:
+            print(f'Listening and registered on Port {FIF_PORT:02X}h to {sys_get.text}')
+    except:
+        sys.exit(f"FAILED to find {hosturl} - not connected")
 
     ## DONT RUN THIS IN A VM OR THE HOST CAN'T BE SEEN
     server.start(host="", port=SRV_PORT)
