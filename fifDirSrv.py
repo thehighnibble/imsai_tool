@@ -14,9 +14,7 @@
 #
 #   TODO:
 #       - get disk map from a file or the command line
-#       - allow with image.dsk for imageDir and serve accordingly 
-#           ie. integrate both solutions
-#           and maintain multipole directories
+#       - use requests.Sessions
 #       - add more error detection and return more error codes
 #
 #   known issues:
@@ -44,27 +42,39 @@ SRV_PATH = srv
 hosturl = 'http://imsai8080'
 _srvurl = f'http://{socket.gethostname()}:{SRV_PORT}/{SRV_PATH}'
 
-# disks = { 'A': 'cpm22b01.dsk', 'B': 'comms.dsk', 'C': 'dazzler.dsk', 'D': 'ZorkI.dsk' }
+disks = { 'A': 'cpm22b01.unpacked', 'B': 'comms.unpacked', 'C': 'dazzler.unpacked', 'D': 'ZorkI.unpacked' }
 disk_to_unit = { 'A': 1, 'B': 2, 'C': 4, 'D': 8, 'I': 15 }
-sel_units = [ 1 ]
-unit_file = { }
-
-dir = []
-
-root = "source"
+sel_units = [ ]
+unit_info = { }
 
 def main():
 
-    global dir
-    # print('DISKS:')
-    # for d in disks:
-    #     sel_units.append(disk_to_unit[d])
-    #     unit_file[disk_to_unit[d.upper()]] = disks[d]
-    #     print(f'\tDSK:{d.upper()}: = {disks[d]}')
-    build_directory(root)
+    print('DISKS:')
+    for d in disks:
+        sel_units.append(disk_to_unit[d])
 
-    dir = parseDir(bytearray(dirdata))
-    # printDir(dir)
+        unit_info[disk_to_unit[d.upper()]] = {}
+
+        dstat = os.stat(disks[d])
+    
+        if S_ISREG(dstat.st_mode):
+            unit_info[disk_to_unit[d.upper()]]['type'] = 'IMG'
+            unit_info[disk_to_unit[d.upper()]]['file'] = disks[d]
+            print(f'\tDSK:{d.upper()}: = IMAGE: {disks[d]}')
+        elif S_ISDIR(dstat.st_mode):
+            print(f'\tDSK:{d.upper()}: = PATH : {disks[d]}')
+            (boot, data) = build_directory(disks[d])
+            dir = parseDir(data)
+            printDir(dir)
+            unit_info[disk_to_unit[d.upper()]]['type'] = 'DIR'
+            unit_info[disk_to_unit[d.upper()]]['root'] = disks[d]
+            unit_info[disk_to_unit[d.upper()]]['boot'] = boot
+            unit_info[disk_to_unit[d.upper()]]['dirdata'] = data
+            unit_info[disk_to_unit[d.upper()]]['dir'] = dir
+        else:
+            sys.exit(f"FAILED drive {d}: file {disks[d]} - not recognised")
+
+    # print(unit_info)
 
     try:
         sys_get = requests.patch(f'{hosturl}/io?p=-{FIF_PORT:02X}', data=_srvurl)
@@ -139,13 +149,11 @@ dpb = {
     'tracks': 77
 }
 
-boot = False
-dirdata = [ DEL_BYTE ] * (EXT_SZ * dpb['dirsize'])
 
 def build_directory(root):
 
-    global boot
-    global dirdata
+    boot = False
+    dirdata = [ DEL_BYTE ] * (EXT_SZ * dpb['dirsize'])
 
     d = os.scandir(root)
 
@@ -174,7 +182,7 @@ def build_directory(root):
             else:
                 outcome = '<IGNORED>'
 
-            print(f"{i.name:12} <DIR> {outcome}")
+            # print(f"{i.name:12} <DIR> {outcome}")
 
             subd = os.path.join(root, i.name)
             sd = os.scandir(subd)
@@ -187,7 +195,7 @@ def build_directory(root):
                     cpmfile = f'{n[0]:8}'
                     cpmext = f'{n[1]:3}'
 
-                    print(f"{cpmfile}.{cpmext} {size:6} {size//1024:5} {size//128:5}")
+                    # print(f"{cpmfile}.{cpmext} {size:6} {size//1024:5} {size//128:5}")
 
                     ext = [0] * 32
 
@@ -233,7 +241,7 @@ def build_directory(root):
                         xl += 1
                         rc -= 128    
 
-    return
+    return ( boot, bytearray(dirdata) )
 
 
 # PARSE DIRECTORY EXTENTS INTO dir ARRAY OF DICTIONARIES ie. USER:FILE.EXT
@@ -293,8 +301,30 @@ def printDir(dir):
             for f in dir[u]:
                 print(f"{f} {((dir[u][f]['blocks'] * dpb['blksize'])//1024):5}K {dir[u][f]['recs']:5}")
 
+def write_sector(unit, trk, sec, data):
 
-def write_sector(trk, sec, data):
+    if unit_info[unit]['type'] == 'IMG':
+        writeFileSector(unit, trk, sec, data)
+    elif unit_info[unit]['type'] == 'DIR':
+        writeDirSector(unit, trk, sec, data)
+
+
+def writeFileSector(unit, trk, sec, data):
+
+    fd = open(unit_info[unit]['file'], 'r+b')
+
+    pos = (trk * SPT8 + sec - 1) * SEC_SZ
+
+    fd.seek(pos)
+    fd.write(data)
+    fd.close()
+
+
+def writeDirSector(unit, trk, sec, data):
+
+    root = unit_info[unit]['root']
+    dirdata = unit_info[unit]['dirdata']
+    dir = unit_info[unit]['dir']
 
     # BOOT TRACKS
     if trk < dpb['offset']:
@@ -308,6 +338,13 @@ def write_sector(trk, sec, data):
     # DIRECTORY
     if sec < ((dpb['dirsize'] * EXT_SZ) // SEC_SZ):
         print(f"WRITE DIR : {trk}:{sec}")
+
+        # DO ALL THE DIRECTORY MAGIC
+        # - check for change to USER 0xE5 means DELETE file
+        # - check for change to FILENAME.EXT means RENAME file
+        # - check for change to xl,xh,bc,rc means ?????
+        # - check for chnages to blockPointers (16) means ?????
+
     else:
         for u in range(16):
             for f in dir[u]:
@@ -323,7 +360,6 @@ def write_sector(trk, sec, data):
                     # fd = open(os.path.join(root, f'{u}', fn), 'rb')
 
                     # fd.seek(pos)
-                    # data = fd.read(SEC_SZ)
                     # fd.close()
 
                     break
@@ -335,13 +371,39 @@ def write_sector(trk, sec, data):
     return
 
 
-def read_sector(trk, sec):
+def read_sector(unit, trk, sec):
+
+    if unit_info[unit]['type'] == 'IMG':
+        return readFileSector(unit, trk, sec)
+    elif unit_info[unit]['type'] == 'DIR':
+        return readDirSector(unit, trk, sec)
+
+
+def readFileSector(unit, trk, sec):
+
+    print(f"IMAGE READ: {unit}:{trk}:{sec} {unit_info[unit]['file']}")
+
+    fd = open(unit_info[unit]['file'], 'rb')
+
+    pos = (trk * SPT8 + sec - 1) * SEC_SZ
+    fd.seek(pos)
+    data = fd.read(SEC_SZ)
+    
+    fd.close()
+    return data
+
+
+def readDirSector(unit, trk, sec):
 
     empty_sec = [ DEL_BYTE ] * SEC_SZ
+    root = unit_info[unit]['root']
+    boot = unit_info[unit]['boot']
+    dirdata = unit_info[unit]['dirdata']
+    dir = unit_info[unit]['dir']
 
     # BOOT TRACKS
     if trk < dpb['offset']:
-        # print(f"BOOT: {trk}:{sec}")
+        print(f"BOOT: {trk}:{sec}")
         if boot:
             fd = open(os.path.join(root, '$BOOT'), 'rb')
 
@@ -360,10 +422,10 @@ def read_sector(trk, sec):
 
     # DIRECTORY
     if sec < ((dpb['dirsize'] * EXT_SZ) // SEC_SZ):
-        # print(f"DIR : {trk}:{sec}")
+        print(f"DIR : {trk}:{sec}")
 
         pos = sec * SEC_SZ
-        data = bytearray(dirdata[pos: pos + SEC_SZ])
+        data = dirdata[pos: pos + SEC_SZ]
 
     # DISK DATA
     else:
@@ -376,7 +438,7 @@ def read_sector(trk, sec):
                     fn = '.'.join(fn)
 
                     pos = (sec - (dir[u][f]['data'][0] * 8)) * SEC_SZ
-                    # print(f"READ : {trk}:{sec} block:{blk} in file: {fn} pos: {pos}")
+                    print(f"READ : {trk}:{sec} block:{blk} in file: {fn} pos: {pos}")
 
                     fd = open(os.path.join(root, f'{u}', fn), 'rb')
 
@@ -411,36 +473,19 @@ def disk_io(addr):
     if unit in sel_units:
 
         if cmd == 1:
-            # fd = open(unit_file[unit], 'r+b')
-
-            # pos = (track * SPT8 + sector - 1) * SEC_SZ
 
             sec_get = requests.get(f'{hosturl}/dma?m={dma_addr:04X}&n={SEC_SZ:02X}')
             blksec = sec_get.content
 
-            # GO FIND THE SECTOR FROM THE DISK FOR track:sector OR pos
-            # AND WRITE blksec...
-            write_sector(track, sector, blksec)
-
-            # fd.seek(pos)
-            # fd.write(blksec)
-            # fd.close()
+            write_sector(unit, track, sector, blksec)
 
             disk_res = bytes.fromhex('01')
         elif cmd == 2:
-            # fd = open(unit_file[unit], 'rb')
 
-            # pos = (track * SPT8 + sector - 1) * SEC_SZ
-            # fd.seek(pos)
-            # block = fd.read(SEC_SZ)
-
-            # GO FIND THE SECTOR FROM THE DISK FOR track:sector
-            # AND READ blksec...
-            blksec = read_sector(track, sector)
+            blksec = read_sector(unit, track, sector)
 
             sec_put = requests.put(f'{hosturl}/dma?m={dma_addr:04X}&n={SEC_SZ:02X}', data=blksec)
             
-            # fd.close()
             disk_res = bytes.fromhex('01')
         else: 
             disk_res = bytes.fromhex('A1')
