@@ -11,7 +11,6 @@
 #       python3
 #
 #   TODO:
-#       - make target folder for disk directories either PWD or an argumant or the image name
 #
 #   known issues:
 #       - TBD
@@ -102,9 +101,9 @@ def main():
     args = sys.argv[1:]
     print (args)
 
-    image = open(args[0], "rb")
+    image = open(args[0] + '.dsk', "rb")
 
-    root = 'disk'
+    root = args[0] + '.unpacked'
 
     # print(dpb)
 
@@ -131,7 +130,11 @@ def main():
     dir = parseDir(dirData)
     printDir(dir)
 
-    os.mkdir(root)
+    try:
+        os.mkdir(root)
+    except FileExistsError:
+        sys.exit(f'FAILED to create {root} - directory already exists')
+
     if boot[0] != DEL_BYTE:
         bf = open(os.path.join(root, '$BOOT'), 'wb')
         bf.write(boot)

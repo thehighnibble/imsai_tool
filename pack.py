@@ -11,7 +11,6 @@
 #       python3
 #
 #   TODO:
-#       - make source folder for disk directories either PWD or an argumant or the image name
 #
 #   known issues:
 #       - TBD
@@ -101,7 +100,11 @@ def printDir(dir):
 
 # FORMAT AN EMPTY DISK IMAGE
 def formatImage(name):
-    disk = open(name, 'w+b')
+
+    try:
+        disk = open(name, 'xb')
+    except FileExistsError:
+        sys.exit(f"FAILED to open {name} - file exists")
 
     sec = [ DEL_BYTE ] * SEC_SZ
 
@@ -117,7 +120,7 @@ def main():
     args = sys.argv[1:]
     print (args)
 
-    root = 'source'
+    root = args[0] + '.unpacked'
 
     d = os.scandir(root)
 
@@ -207,9 +210,9 @@ def main():
                         xl += 1
                         rc -= 128
 
-    formatImage(args[0])
+    formatImage(args[0] + '.dsk')
 
-    disk = open(args[0], 'r+b')
+    disk = open(args[0] + '.dsk', 'r+b')
 
     #WRITE BOOT TRACKS
     if boot:
