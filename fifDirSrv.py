@@ -47,6 +47,8 @@ unit_file = { }
 
 dir = []
 
+root = "source"
+
 def main():
 
     global dir
@@ -55,7 +57,7 @@ def main():
     #     sel_units.append(disk_to_unit[d])
     #     unit_file[disk_to_unit[d.upper()]] = disks[d]
     #     print(f'\tDSK:{d.upper()}: = {disks[d]}')
-    build_directory()
+    build_directory(root)
 
     dir = parseDir(bytearray(dirdata))
     # printDir(dir)
@@ -133,12 +135,12 @@ dpb = {
 boot = False
 dirdata = [ DEL_BYTE ] * (EXT_SZ * dpb['dirsize'])
 
-def build_directory():
+def build_directory(root):
 
     global boot
     global dirdata
 
-    d = os.scandir('source')
+    d = os.scandir(root)
 
     dirI = 0
     # blkN = 2 # CALCULATE BASED ON dirsize
@@ -167,7 +169,7 @@ def build_directory():
 
             print(f"{i.name:12} <DIR> {outcome}")
 
-            subd = os.path.join('source', i.name)
+            subd = os.path.join(root, i.name)
             sd = os.scandir(subd)
 
             for f in sd:
@@ -311,7 +313,7 @@ def write_sector(trk, sec, data):
                     pos = (sec - (dir[u][f]['data'][0] * 8)) * SEC_SZ
                     print(f"WRITE FILE: {trk}:{sec} block:{blk} in file: {fn} pos: {pos}")
 
-                    # fd = open(f'source/{u}/{fn}', 'rb')
+                    # fd = open(os.path.join(root, f'{u}', fn), 'rb')
 
                     # fd.seek(pos)
                     # data = fd.read(SEC_SZ)
@@ -334,7 +336,7 @@ def read_sector(trk, sec):
     if trk < dpb['offset']:
         # print(f"BOOT: {trk}:{sec}")
         if boot:
-            fd = open('source/$BOOT', 'rb')
+            fd = open(os.path.join(root, '$BOOT'), 'rb')
 
             pos = (trk * SPT8 + sec - 1) * SEC_SZ
             fd.seek(pos)
@@ -369,7 +371,7 @@ def read_sector(trk, sec):
                     pos = (sec - (dir[u][f]['data'][0] * 8)) * SEC_SZ
                     # print(f"READ : {trk}:{sec} block:{blk} in file: {fn} pos: {pos}")
 
-                    fd = open(f'source/{u}/{fn}', 'rb')
+                    fd = open(os.path.join(root, f'{u}', fn), 'rb')
 
                     fd.seek(pos)
                     data = fd.read(SEC_SZ)
