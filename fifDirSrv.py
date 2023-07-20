@@ -69,6 +69,7 @@ def main():
             unit_info[disk_to_unit[d.upper()]]['boot'] = boot
             unit_info[disk_to_unit[d.upper()]]['dirdata'] = data
             unit_info[disk_to_unit[d.upper()]]['dir'] = dir
+            unit_info[disk_to_unit[d.upper()]]['buffer'] = [ ]
         else:
             sys.exit(f"FAILED drive {d}: file {disks[d]} - not recognised")
 
@@ -242,6 +243,30 @@ def build_directory(root):
     return ( boot, bytearray(dirdata) )
 
 
+def filename(buf, strip = True):
+    """Format a filename as FILENAME.EXT
+    
+    #### Parameters
+    - buf : the source array for characters (8+3)
+    - strip : strip trailing spaces from the filename and extension 
+    """
+    filename = ''
+    for f in range(8):
+        filename += chr(buf[ f ])
+
+    if strip:
+        filename = filename.rstrip()
+
+    filename += '.'
+    for e in range(3):
+        filename += chr(buf[ 8 + e ])
+
+    if strip:
+        filename = filename.rstrip()
+    
+    return filename
+
+
 # PARSE DIRECTORY EXTENTS INTO dir ARRAY OF DICTIONARIES ie. USER:FILE.EXT
 def parseDir(dirData):
 
@@ -317,16 +342,158 @@ def writeFileSector(unit, trk, sec, data):
     fd.write(data)
     fd.close()
 
+def lsec(e):
+    return e['lsec']
 
-def writeDirSector(unit, trk, sec, data):
+# DO ALL THE DIRECTORY MAGIC
+# - check for change to USER 0xE5 means DELETE file
+# - check for change to FILENAME.EXT means RENAME file
+# - check for change to xl,xh,bc,rc means ?????
+# - check for changes to blockPointers (16) means WRITE new block from buffer
+def check_dir_sec(unit, trk, sec, data):
 
     root = unit_info[unit]['root']
     dirdata = unit_info[unit]['dirdata']
     dir = unit_info[unit]['dir']
 
+    # diff = [ 0 ] * SEC_SZ
+
+    pos = sec * SEC_SZ
+    secdata = dirdata[pos: pos + SEC_SZ]
+
+    ext = -1
+
+    # FIND *FIRST* EXTENT THAT HAS CHANGED - ASSUMES ONLY ONE!
+    for i in range(len(data)):
+        if data[i] != secdata[i]:
+            # diff[i] = ( data[i], secdata[i] )
+            ext = i // EXT_SZ
+            break
+
+    # print (ext)
+    if ext > -1:
+        lext = ext + sec * (SEC_SZ // EXT_SZ)
+    else:
+        print("NO DIRECTORY EXTENT HAS CHANGED")
+        return
+
+    # print(dext)
+    extpos = lext * EXT_SZ
+    # print('BEFORE:', dirdata[extpos: extpos + EXT_SZ])
+    # print('AFTER :', bytearray(data[ext * EXT_SZ:(ext + 1) * EXT_SZ]))
+
+    orig = {
+        'user': dirdata[extpos],
+        'file': bytes(dirdata[extpos + 1 : extpos + 12]),
+        'xl': dirdata[extpos + 12],
+        'rc': dirdata[extpos + 15],
+        'blocks': bytes(dirdata[extpos + 16 :extpos + 32])
+    }
+
+    new = {
+        'user': data[ext * EXT_SZ],
+        'file': data[ext * EXT_SZ + 1 : ext * EXT_SZ + 12],
+        'xl': data[ext * EXT_SZ + 12],
+        'rc': data[ext * EXT_SZ + 15],
+        'blocks': data[ext * EXT_SZ + 16 :ext * EXT_SZ + 32]
+    }
+
+    print(orig)
+    print(new)
+
+    # DELETE
+    if orig['user'] < 16 and new['user'] == DEL_BYTE:
+        if new['xl'] == 0:
+            print(f"DELETE FILE: {filename(orig['file'])}")
+            try:
+                os.remove(os.path.join(root, f"{orig['user']}", filename(orig['file'])))
+            except:
+                pass
+        else: # new['xl'] > 0:
+            print(f"MARK DELETED EXTENT: {new['xl']} for {orig['file']}")
+    # CREATE
+    elif orig['user'] == DEL_BYTE and new['user'] < 16:
+        if new['xl'] == 0:
+            print(f"CREATE FILE: {filename(new['file'])}")
+            try:
+                fd = open(os.path.join(root, f"{new['user']}", filename(new['file'])), "xb")
+                fd.close()
+            except:
+                pass
+        else: # new['xl'] > 0:
+            print(f"ADD EXTENT: {new['xl']} {new['file']}")
+    # RENAME
+    elif new['file'] != orig['file']:
+        if new['xl'] == 0:
+            print(f"RENAME FILE: {filename(orig['file'])} to {filename(new['file'])}")
+            try:
+                os.rename(os.path.join(root, f"{orig['user']}", filename(orig['file'])),
+                          os.path.join(root, f"{new['user']}", filename(new['file'])))
+            except:
+                pass
+        else: # new['xl'] > 0:
+            print(f"RENAME EXTENT: {new['xl']} {orig['file']} to {new['file']}")
+    # ADD SECTORS/BLOCKS TO AN EXTENT
+    else:
+        print(f"UPDATE EXTENT: {new['file']}")
+
+        # print(unit_info[unit]['buffer'])
+        unit_info[unit]['buffer'].sort(key=lsec)
+
+        for n in new['blocks']:
+            found = False 
+            if n != orig['blocks'][new['blocks'].index(n)]:
+                for b in unit_info[unit]['buffer']:
+                    if b['blk'] == n:
+                        found = True
+                        if new['xl'] == 0: # if first extent, use first block as base
+                            pos = (b['lsec'] - (new['blocks'][0] * 8)) * SEC_SZ
+                        else: # if NOT first extent, use first block in first extent as base
+                            pos = (b['lsec'] - (dir[new['user']][filename(new['file'], False)]['data'][0] * 8)) * SEC_SZ
+
+                        # print(b['lsec'], new['xl'], pos)
+                        fd = open(os.path.join(root, f"{new['user']}", filename(new['file'])), 'r+b')
+                        fd.seek(pos)
+                        fd.write(b['data'])
+                        fd.close()
+                        b['blk'] = -1 # mark buffer entry as used
+            # DETECT IF A NEW BLOCK HAS NO DATA IN THE BUFFER
+            if not found and n != 0:
+                print(f"BAD BLOCK REF {n} - NO DATA AVAILABLE IN BUFFER")
+
+        # TEST TO SEE IF ANY DATA REMAINS UNUSED IN THE BUFFER
+        for b in unit_info[unit]['buffer']:
+            if b['blk'] >= 0:
+                print(f"UNUSED DATA IN WRITE BUFFER blk={b['blk']} lsec={b['lsec']}")
+        
+        #EMPTY THE BUFFER
+        unit_info[unit]['buffer'].clear()
+
+    # UPDATE IN MEMORY DIRECTORY STRUCTURES 
+    # for i in range(EXT_SZ):
+    #     dirdata[extpos + i ] = data[ext * EXT_SZ + i]
+    dirdata[extpos: extpos + EXT_SZ] = data[ext * EXT_SZ: (ext + 1) * EXT_SZ]
+    #unit_info[unit]['dirdata'] = dirdata # not needed as lists are by reference not copied
+    unit_info[unit]['dir'] = parseDir(dirdata)
+
+
+def writeDirSector(unit, trk, sec, data):
+
+    root = unit_info[unit]['root']
+    # dirdata = unit_info[unit]['dirdata']
+    dir = unit_info[unit]['dir']
+
     # BOOT TRACKS
     if trk < dpb['offset']:
-        print(f"WRITE BOOT: {trk}:{sec}")
+
+        pos = (trk * dpb['sectors'] + sec) * SEC_SZ #??? TODO: does this need top go through trans[] ???
+        print(f"WRITE BOOT: {trk}:{sec} pos= {pos}")
+
+        fd = open(os.path.join(root, '$BOOT'), 'r+b')
+        fd.seek(pos)
+        fd.write(data)
+        fd.close()
+
         return
 
     sec = trans.index(sec)
@@ -336,13 +503,7 @@ def writeDirSector(unit, trk, sec, data):
     # DIRECTORY
     if sec < ((dpb['dirsize'] * EXT_SZ) // SEC_SZ):
         print(f"WRITE DIR : {trk}:{sec}")
-
-        # DO ALL THE DIRECTORY MAGIC
-        # - check for change to USER 0xE5 means DELETE file
-        # - check for change to FILENAME.EXT means RENAME file
-        # - check for change to xl,xh,bc,rc means ?????
-        # - check for chnages to blockPointers (16) means ?????
-
+        check_dir_sec(unit, trk, sec, data)
     else:
         for u in range(16):
             for f in dir[u]:
@@ -353,19 +514,20 @@ def writeDirSector(unit, trk, sec, data):
                     fn = '.'.join(fn)
 
                     pos = (sec - (dir[u][f]['data'][0] * 8)) * SEC_SZ
-                    print(f"WRITE FILE: {trk}:{sec} block:{blk} in file: {fn} pos: {pos}")
+                    print(f"WRITE TO FILE BLOCK: {trk}:{sec} block:{blk} in file: {fn} pos: {pos}")
 
-                    # fd = open(os.path.join(root, f'{u}', fn), 'rb')
-
-                    # fd.seek(pos)
-                    # fd.close()
+                    fd = open(os.path.join(root, f'{u}', fn), 'r+b')
+                    fd.seek(pos)
+                    fd.write(data)
+                    fd.close()
 
                     break
             else:
                 continue
             break
         else:
-            print(f"WRITE EMPTY: {trk}:{sec} block:{blk}")
+            print(f"WRITE TO EMPTY BLOCK: {trk}:{sec} block:{blk}")
+            unit_info[unit]['buffer'].append({ 'lsec': sec, 'blk': blk, 'data': data })
     return
 
 
