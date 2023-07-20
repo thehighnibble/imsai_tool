@@ -44,14 +44,12 @@ _srvurl = f'http://{socket.gethostname()}:{SRV_PORT}/{SRV_PATH}'
 
 disks = { 'A': 'cpm22b01.unpacked', 'B': 'comms.unpacked', 'C': 'dazzler.unpacked', 'D': 'ZorkI.unpacked' }
 disk_to_unit = { 'A': 1, 'B': 2, 'C': 4, 'D': 8, 'I': 15 }
-sel_units = [ ]
 unit_info = { }
 
 def main():
 
     print('DISKS:')
     for d in disks:
-        sel_units.append(disk_to_unit[d])
 
         unit_info[disk_to_unit[d.upper()]] = {}
 
@@ -470,7 +468,7 @@ def disk_io(addr):
 
     # print(f'{cmd_str[cmd]} {unit}:{track}:{sector} <-> {dma_addr:04X}')
 
-    if unit in sel_units:
+    if unit in list(unit_info):
 
         if cmd == 1:
 
