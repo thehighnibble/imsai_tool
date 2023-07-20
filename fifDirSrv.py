@@ -14,7 +14,6 @@
 #
 #   TODO:
 #       - get disk map from a file or the command line
-#       - use requests.Sessions
 #       - add more error detection and return more error codes
 #
 #   known issues:
@@ -45,6 +44,8 @@ _srvurl = f'http://{socket.gethostname()}:{SRV_PORT}/{SRV_PATH}'
 disks = { 'A': 'cpm22b01.unpacked', 'B': 'comms.unpacked', 'C': 'dazzler.unpacked', 'D': 'ZorkI.unpacked' }
 disk_to_unit = { 'A': 1, 'B': 2, 'C': 4, 'D': 8, 'I': 15 }
 unit_info = { }
+
+sess = requests.Session()
 
 def main():
 
@@ -617,7 +618,7 @@ def readDirSector(unit, trk, sec):
 
 
 def disk_io(addr):
-    dma_get = requests.get(f'{hosturl}/dma?m={addr:04X}&n=7')
+    dma_get = sess.get(f'{hosturl}/dma?m={addr:04X}&n=7')
     mem = dma_get.content
 
     unit = mem[0] & 0x0F
@@ -634,7 +635,7 @@ def disk_io(addr):
 
         if cmd == 1:
 
-            sec_get = requests.get(f'{hosturl}/dma?m={dma_addr:04X}&n={SEC_SZ:02X}')
+            sec_get = sess.get(f'{hosturl}/dma?m={dma_addr:04X}&n={SEC_SZ:02X}')
             blksec = sec_get.content
 
             write_sector(unit, track, sector, blksec)
@@ -644,13 +645,13 @@ def disk_io(addr):
 
             blksec = read_sector(unit, track, sector)
 
-            sec_put = requests.put(f'{hosturl}/dma?m={dma_addr:04X}&n={SEC_SZ:02X}', data=blksec)
+            sec_put = sess.put(f'{hosturl}/dma?m={dma_addr:04X}&n={SEC_SZ:02X}', data=blksec)
             
             disk_res = bytes.fromhex('01')
         else: 
             disk_res = bytes.fromhex('A1')
 
-        dma_put = requests.put(f'{hosturl}/dma?m={(addr + 1):04X}', data=disk_res)
+        dma_put = sess.put(f'{hosturl}/dma?m={(addr + 1):04X}', data=disk_res)
         # print(dma_put.status_code, dma_put.text)
 
         return 1
@@ -663,6 +664,7 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         # do nothing here
         print("KEY INT")
+        sess.close()
         sys_get = requests.delete(f'{hosturl}/io?p={FIF_PORT:02X}')
         if sys_get.status_code == 200:
             print(f'De-registered on {sys_get.text}')
