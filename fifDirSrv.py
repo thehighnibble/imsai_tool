@@ -399,8 +399,8 @@ def check_dir_sec(unit, trk, sec, data):
         'blocks': data[ext * EXT_SZ + 16 :ext * EXT_SZ + 32]
     }
 
-    print(orig)
-    print(new)
+    # print(orig)
+    # print(new)
 
     # DELETE
     if orig['user'] < 16 and new['user'] == DEL_BYTE:
@@ -503,7 +503,7 @@ def writeDirSector(unit, trk, sec, data):
 
     # DIRECTORY
     if sec < ((dpb['dirsize'] * EXT_SZ) // SEC_SZ):
-        print(f"WRITE DIR : {trk}:{sec}")
+        # print(f"WRITE DIR : {trk}:{sec}")
         check_dir_sec(unit, trk, sec, data)
     else:
         for u in range(16):
@@ -527,7 +527,7 @@ def writeDirSector(unit, trk, sec, data):
                 continue
             break
         else:
-            print(f"WRITE TO EMPTY BLOCK: {trk}:{sec} block:{blk}")
+            # print(f"WRITE TO EMPTY BLOCK: {trk}:{sec} block:{blk}")
             unit_info[unit]['buffer'].append({ 'lsec': sec, 'blk': blk, 'data': data })
     return
 
@@ -542,7 +542,7 @@ def read_sector(unit, trk, sec):
 
 def readFileSector(unit, trk, sec):
 
-    print(f"IMAGE READ: {unit}:{trk}:{sec} {unit_info[unit]['file']}")
+    # print(f"IMAGE READ: {unit}:{trk}:{sec} {unit_info[unit]['file']}")
 
     fd = open(unit_info[unit]['file'], 'rb')
 
@@ -564,7 +564,7 @@ def readDirSector(unit, trk, sec):
 
     # BOOT TRACKS
     if trk < dpb['offset']:
-        print(f"READ BOOT: {trk}:{sec}")
+        # print(f"READ BOOT: {trk}:{sec}")
         if boot:
             fd = open(os.path.join(root, '$BOOT'), 'rb')
 
@@ -583,7 +583,7 @@ def readDirSector(unit, trk, sec):
 
     # DIRECTORY
     if sec < ((dpb['dirsize'] * EXT_SZ) // SEC_SZ):
-        print(f"READ DIR : {trk}:{sec}")
+        # print(f"READ DIR : {trk}:{sec}")
 
         pos = sec * SEC_SZ
         data = dirdata[pos: pos + SEC_SZ]
@@ -599,7 +599,7 @@ def readDirSector(unit, trk, sec):
                     fn = '.'.join(fn)
 
                     pos = (sec - (dir[u][f]['data'][0] * 8)) * SEC_SZ
-                    print(f"READ FILE BLOCK: {trk}:{sec} block:{blk} in file: {fn} pos: {pos}")
+                    # print(f"READ FILE BLOCK: {trk}:{sec} block:{blk} in file: {fn} pos: {pos}")
 
                     fd = open(os.path.join(root, f'{u}', fn), 'rb')
 
