@@ -175,7 +175,7 @@ def build_directory(root):
             
         if S_ISDIR(i.stat().st_mode):
 
-            if f"{int(i.name)}" == i.name and int(i.name) in range(16):
+            if i.name.isnumeric() and int(i.name) in range(16):
                 outcome = f'USER: {i.name}'
             else:
                 outcome = '<IGNORED>'
