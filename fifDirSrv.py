@@ -58,12 +58,12 @@ def main():
         if S_ISREG(dstat.st_mode):
             unit_info[disk_to_unit[d.upper()]]['type'] = 'IMG'
             unit_info[disk_to_unit[d.upper()]]['file'] = disks[d]
-            print(f'\tDSK:{d.upper()}: = IMAGE: {disks[d]}')
+            print(f'DSK:{d.upper()}: = IMAGE: {disks[d]}')
         elif S_ISDIR(dstat.st_mode):
-            print(f'\tDSK:{d.upper()}: = PATH : {disks[d]}')
+            print(f'DSK:{d.upper()}: = PATH : {disks[d]}')
             (boot, data) = build_directory(disks[d])
             dir = parseDir(data)
-            printDir(dir)
+            # printDir(dir)
             unit_info[disk_to_unit[d.upper()]]['type'] = 'DIR'
             unit_info[disk_to_unit[d.upper()]]['root'] = disks[d]
             unit_info[disk_to_unit[d.upper()]]['boot'] = boot
@@ -171,7 +171,7 @@ def build_directory(root):
             else:
                 outcome = '<IGNORED>'
 
-            print(f"{i.name:12} {s:6} {s//1024:5} {s//128:5} {outcome}")
+            print(f"{i.name:12} {s//1024:5}K {s//128:5} {outcome}")
             
         if S_ISDIR(i.stat().st_mode):
 
@@ -180,7 +180,7 @@ def build_directory(root):
             else:
                 outcome = '<IGNORED>'
 
-            # print(f"{i.name:12} <DIR> {outcome}")
+            print(f"{i.name:12} <DIR> {outcome}")
 
             subd = os.path.join(root, i.name)
             sd = os.scandir(subd)
@@ -401,7 +401,7 @@ def readDirSector(unit, trk, sec):
 
     # BOOT TRACKS
     if trk < dpb['offset']:
-        print(f"BOOT: {trk}:{sec}")
+        print(f"READ BOOT: {trk}:{sec}")
         if boot:
             fd = open(os.path.join(root, '$BOOT'), 'rb')
 
@@ -420,7 +420,7 @@ def readDirSector(unit, trk, sec):
 
     # DIRECTORY
     if sec < ((dpb['dirsize'] * EXT_SZ) // SEC_SZ):
-        print(f"DIR : {trk}:{sec}")
+        print(f"READ DIR : {trk}:{sec}")
 
         pos = sec * SEC_SZ
         data = dirdata[pos: pos + SEC_SZ]
@@ -436,7 +436,7 @@ def readDirSector(unit, trk, sec):
                     fn = '.'.join(fn)
 
                     pos = (sec - (dir[u][f]['data'][0] * 8)) * SEC_SZ
-                    print(f"READ : {trk}:{sec} block:{blk} in file: {fn} pos: {pos}")
+                    print(f"READ FILE BLOCK: {trk}:{sec} block:{blk} in file: {fn} pos: {pos}")
 
                     fd = open(os.path.join(root, f'{u}', fn), 'rb')
 
