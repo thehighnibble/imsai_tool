@@ -427,6 +427,12 @@ def writeFileSector(unit, trk, sec, data):
 def lsec(e):
     return e['lsec']
 
+def dispDirAction(unit, desc):
+    i = list(unit_info).index(unit)
+    win.addstr(4*i + 8, 0, f"<DIR> - {desc}")
+    win.clrtoeol()
+    win.refresh()
+
 # DO ALL THE DIRECTORY MAGIC
 # - check for change to USER 0xE5 means DELETE file
 # - check for change to FILENAME.EXT means RENAME file
@@ -491,16 +497,19 @@ def check_dir_sec(unit, trk, sec, data):
     if orig['user'] < 16 and new['user'] == DEL_BYTE:
         if new['xNum'] == 0:
             print(f"DELETE FILE: {filename(orig['file'])}")
+            dispDirAction(unit, f"DELETE FILE: {orig['user']}:{filename(orig['file'])}")
             try:
                 os.remove(os.path.join(root, f"{orig['user']}", filename(orig['file'])))
             except:
                 pass
         else: # new['xNum'] > 0:
             print(f"MARK DELETED EXTENT: {new['xNum']} for {orig['file']}")
+            dispDirAction(unit, f"DELETE LOGICAL EXTENT: {new['xNum']} for {orig['user']}:{filename(orig['file'])}")
     # CREATE
     elif orig['user'] == DEL_BYTE and new['user'] < 16:
         if new['xNum'] == 0:
             print(f"CREATE FILE: {filename(new['file'])}")
+            dispDirAction(unit, f"CREATE FILE: {new['user']}:{filename(new['file'])}")
             try:
                 fd = file_start(os.path.join(root, f"{new['user']}", filename(new['file'])), "xb")
                 # file_end()
@@ -508,10 +517,12 @@ def check_dir_sec(unit, trk, sec, data):
                 pass
         else: # new['xNum'] > 0:
             print(f"ADD EXTENT: {new['xNum']} {new['file']}")
+            dispDirAction(unit, f"ADD LOGICAL EXTENT: {new['xNum']} for {new['user']}:{filename(new['file'])}")
     # RENAME
     elif new['file'] != orig['file']:
         if new['xNum'] == 0:
             print(f"RENAME FILE: {filename(orig['file'])} to {filename(new['file'])}")
+            dispDirAction(unit, f"RENAME FILE: {orig['user']}:{filename(orig['file'])} to {new['user']}:{filename(new['file'])}")
             try:
                 os.rename(os.path.join(root, f"{orig['user']}", filename(orig['file'])),
                           os.path.join(root, f"{new['user']}", filename(new['file'])))
@@ -519,6 +530,7 @@ def check_dir_sec(unit, trk, sec, data):
                 pass
         else: # new['xNum'] > 0:
             print(f"RENAME EXTENT: {new['xNum']} {orig['file']} to {new['file']}")
+            dispDirAction(unit, f"RENAME LOGICAL EXTENT: {new['xNum']} from {orig['user']}:{filename(orig['file'])} to {new['user']}:{filename(new['file'])}")
     # ADD SECTORS/BLOCKS TO AN EXTENT
     else:
         print(f"UPDATE EXTENT: {new['file']}")
@@ -532,6 +544,7 @@ def check_dir_sec(unit, trk, sec, data):
             if n != orig['blocks'][new['blocks'].index(n)]:
                 for b in unit_info[unit]['buffer']:
                     if b['blk'] == n:
+                        dispDirAction(unit, f"WRITE BUFFERED BLOCK TO DISK: {b['blk']} to {new['user']}:{filename(new['file'])}")
                         found = True
                         if new['xNum'] == 0: # if first extent, use first block as base
                             pos = (b['lsec'] - (new['blocks'][0] * 8)) * SEC_SZ
@@ -629,6 +642,7 @@ def writeDirSector(unit, trk, sec, data):
             break
         else:
             # print(f"WRITE TO EMPTY BLOCK: {trk}:{sec} block:{blk}")
+            dispDirSector(unit, trk, sec, 'W', '#', '<BUFFERING>')
             unit_info[unit]['buffer'].append({ 'lsec': sec, 'blk': blk, 'data': data })
     return
 
