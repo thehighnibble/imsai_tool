@@ -469,7 +469,7 @@ def check_dir_sec(unit, trk, sec, data):
         'file': bytes(dirdata[extpos + 1 : extpos + 12]),
         'xl': dirdata[extpos + 12],
         'xh': dirdata[extpos + 14],
-        'xNum': (dirdata[extpos + 14] & 0x2F) << 5 | (dirdata[extpos + 12] & 0x1F),
+        'xNum': ((dirdata[extpos + 14] & 0x2F) << 5) | (dirdata[extpos + 12] & 0x1F),
         'rc': dirdata[extpos + 15],
         'blocks': bytes(dirdata[extpos + 16 :extpos + 32])
     }
@@ -479,7 +479,7 @@ def check_dir_sec(unit, trk, sec, data):
         'file': data[ext * EXT_SZ + 1 : ext * EXT_SZ + 12],
         'xl': data[ext * EXT_SZ + 12],
         'xh': data[ext * EXT_SZ + 14],
-        'xNum': ((dirdata[extpos + 14] & 0x2F) << 5) | (dirdata[extpos + 12] & 0x1F),
+        'xNum': ((data[ext * EXT_SZ + 14] & 0x2F) << 5) | (data[ext * EXT_SZ + 12] & 0x1F),
         'rc': data[ext * EXT_SZ + 15],
         'blocks': data[ext * EXT_SZ + 16 :ext * EXT_SZ + 32]
     }
