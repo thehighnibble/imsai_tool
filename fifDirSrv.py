@@ -97,8 +97,8 @@ def main(sc):
             unit_info[disk_to_unit[d]]['file'] = ''
             unit_info[disk_to_unit[d]]['last'] = 0
 
-        win.addstr(4*i + 5, 1, f"DSK:{d}: =  {unit_info[disk_to_unit[d]]['type']}:{unit_info[disk_to_unit[d]]['file']}")
-        win.hline(4*i + 6, 1, '.', 77)
+        win.addstr(4*i + 5, 0, f"DSK:{d}: =  {unit_info[disk_to_unit[d]]['type']}:{unit_info[disk_to_unit[d]]['file']}")
+        win.hline(4*i + 6, 0, '.', 77)
 
     win.refresh()
     # print(unit_info)
@@ -153,9 +153,9 @@ def fif_out(data):
             descno = data & 0x0F
             fdstate += 1
 
-        win.addstr(2, 0, f"FIF DESC: {descno:2}")
+        win.addstr(2, 0, f"FIF DESC:{descno:X}")
         for i in range(16):
-            win.addstr((i//8) + 2, (i%8) * 5 + 13, f"{fdaddr[i]:04X}")
+            win.addstr((i//8) + 2, (i%8) * 7 + 12, f"{i:X}:{fdaddr[i]:04X}")
 
     elif fdstate == 1:
         fdaddr[descno] = data
