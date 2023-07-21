@@ -14,7 +14,8 @@
 #
 #   TODO:
 #       - get disk map from a file or the command line
-#       - add text UI using CURSES module
+#       - normalize the use of trk:sec vs. linear sector
+#       - implement logging
 #       - add more error detection and return more error codes
 #
 #   known issues:
@@ -31,9 +32,12 @@ import sys
 import os
 from stat import *
 import socket
-from simple_http_server import route, server, Response, ModelDict, logger
+from simple_http_server import route, server, Response, ModelDict, logger as httpdlog
+from threading import Thread
+from logging import debug, info, warn, error
+import logging
 
-logger.set_level("ERROR")
+httpdlog.set_level("ERROR")
 
 srv = os.path.splitext(os.path.basename(sys.argv[0]))[0]
 
@@ -68,80 +72,67 @@ win = None
 #         pass
 
 
-def print(*_):
-    pass
+# def print(*_):
+#     pass
 
 def main(sc):
 
     global win
     curses.curs_set(0)
     curses.textpad.rectangle(sc, 0, 0, curses.LINES - 1, TMAX + 1)
+    title = f"[ Remote IMSAI FIF - {srv} ]"
+    sc.addstr(0, (TMAX + 2 - len(title))//2, title)
     sc.refresh()
     win = curses.newwin(curses.LINES - 2 , TMAX , 1, 1)
 
-    print('DISKS:')
-    for i, d in enumerate(disk_to_unit):
+    load_diskmap()
 
-        unit_info[disk_to_unit[d]] = {}
-
-        if d in list(disks):
-            dstat = os.stat(disks[d])
-
-            if S_ISREG(dstat.st_mode):
-                unit_info[disk_to_unit[d]]['type'] = 'IMG'
-                unit_info[disk_to_unit[d]]['file'] = disks[d]
-                unit_info[disk_to_unit[d]]['last'] = 0
-                print(f'DSK:{d}: = IMAGE: {disks[d]}')
-            elif S_ISDIR(dstat.st_mode):
-                print(f'DSK:{d}: = PATH : {disks[d]}')
-                (boot, data) = build_directory(disks[d])
-                dir = parseDir(data)
-                # printDir(dir)
-                unit_info[disk_to_unit[d]]['type'] = 'DIR'
-                unit_info[disk_to_unit[d]]['file'] = disks[d]
-                unit_info[disk_to_unit[d]]['last'] = 0
-                unit_info[disk_to_unit[d]]['boot'] = boot
-                unit_info[disk_to_unit[d]]['dirdata'] = data
-                unit_info[disk_to_unit[d]]['dir'] = dir
-                unit_info[disk_to_unit[d]]['buffer'] = [ ]
-            else:
-                sys.exit(f"FAILED drive {d}: file {disks[d]} - not recognised")
-        else:
-            unit_info[disk_to_unit[d]]['type'] = 'LOCAL'
-            unit_info[disk_to_unit[d]]['file'] = ''
-            unit_info[disk_to_unit[d]]['last'] = 0
-
-        win.addstr(4*i + 5, 0, f"DSK:{d}: =  {unit_info[disk_to_unit[d]]['type']}:{unit_info[disk_to_unit[d]]['file']}")
-        win.hline(4*i + 6, 0, '.', 77)
-
-    win.refresh()
-    # print(unit_info)
-
-    try:
-        sys_get = requests.patch(f'{hosturl}/io?p=-{FIF_PORT:02X}', data=_srvurl)
-        if sys_get.status_code == 200:
-            print(f'Listening and registered on Port {FIF_PORT:02X}h to {sys_get.text}')
-            win.addnstr(0, 0, f'Listening and registered on Port {FIF_PORT:02X}h to {sys_get.text}', TMAX)
-            win.addnstr(1, 0, f'***You must COLD BOOT the IMSAI to recognise the remote FIF***', TMAX)
-            win.refresh()
-    except:
-        sys.exit(f"FAILED to find {hosturl} - not connected")
+    connect_to_host()
 
     ## DONT RUN THIS IN A VM OR THE HOST CAN'T BE SEEN
-    server.start(host="", port=SRV_PORT)
+    th = Thread(target=server.start, args=("", SRV_PORT), daemon=True)
+    th.start()
+
+    while True:
+        key = win.getkey()
+        win.addstr(curses.LINES - 3, 1, f"KEY: <{key}>")
+        win.clrtoeol()
+
+        if key == '^X':
+            connect_to_host()
+        elif key == '^R':
+            load_diskmap()
+        
 
 @route(f'/{SRV_PATH}', method="PUT")
 def io_out(p, m=ModelDict()):
     port = int(p, 16)
     #BODY is a little hard to get as it ends up as the first KEY in the DICT m
     data = int(next(iter(m)), 16) 
-    # print(f'{port:02X} {data:02X}')
+    # info(f'{port:02X} {data:02X}')
     if port == FIF_PORT:
         t = fif_out(data)
 
         if t == 1:
             return Response(status_code=201)
     return #normal 200 response 
+
+def connect_to_host():
+
+    sys_get = requests.delete(f'{hosturl}/io?p={FIF_PORT:02X}')
+    if sys_get.status_code == 200:
+        info(f'De-registered on {sys_get.text}')
+        win.addnstr(0, 0, f'De-registered on {sys_get.text}', TMAX)
+
+    try:
+        sys_get = requests.patch(f'{hosturl}/io?p=-{FIF_PORT:02X}', data=_srvurl)
+        if sys_get.status_code == 200:
+            info(f'Listening and registered on Port {FIF_PORT:02X}h to {sys_get.text}')
+            win.addnstr(0, 0, f'Listening and registered on Port {FIF_PORT:02X}h to {sys_get.text}', TMAX)
+            win.addnstr(1, 0, f'***You must COLD BOOT the IMSAI to recognize the remote FIF***', TMAX)
+            win.refresh()
+    except:
+        sys.exit(f"FAILED to find {hosturl} - not connected")
 
 fdstate = 0
 descno = 0
@@ -155,7 +146,7 @@ def fif_out(data):
 
     res = 0
 
-    win.addstr(1, 0, 'REVC', curses.A_REVERSE)
+    win.addstr(1, 0, 'RECV', curses.A_REVERSE)
     win.refresh()
 
     if fdstate == 0:
@@ -176,10 +167,10 @@ def fif_out(data):
         fdstate += 1
     elif fdstate == 2:
         fdaddr[descno] += data << 8
-        # print(f'Descriptor={descno} addr={fdaddr[descno]:04X}')
+        # info(f'Descriptor={descno} addr={fdaddr[descno]:04X}')
         fdstate = 0
     else:
-        print(f'Internal error fdstate={fdstate}')
+        error(f'Internal error fdstate={fdstate}')
         fdstate = 0
 
     win.move(1, 0)
@@ -205,6 +196,50 @@ dpb = {
     'tracks': 77
 }
 
+def load_diskmap():
+
+    win.move(5,0)
+    win.clrtobot()
+
+    info('DISKS:')
+    for i, d in enumerate(disk_to_unit):
+
+        unit_info[disk_to_unit[d]] = {}
+
+        if d in list(disks):
+            dstat = os.stat(disks[d])
+
+            if S_ISREG(dstat.st_mode):
+                unit_info[disk_to_unit[d]]['type'] = 'IMG'
+                unit_info[disk_to_unit[d]]['file'] = disks[d]
+                unit_info[disk_to_unit[d]]['last'] = 0
+                info(f'DSK:{d}: = IMAGE: {disks[d]}')
+            elif S_ISDIR(dstat.st_mode):
+                info(f'DSK:{d}: = PATH : {disks[d]}')
+                (boot, data) = build_directory(disks[d])
+                dir = parseDir(data)
+                # infoDir(dir)
+                unit_info[disk_to_unit[d]]['type'] = 'DIR'
+                unit_info[disk_to_unit[d]]['file'] = disks[d]
+                unit_info[disk_to_unit[d]]['last'] = 0
+                unit_info[disk_to_unit[d]]['boot'] = boot
+                unit_info[disk_to_unit[d]]['dirdata'] = data
+                unit_info[disk_to_unit[d]]['dir'] = dir
+                unit_info[disk_to_unit[d]]['buffer'] = [ ]
+            else:
+                sys.exit(f"FAILED drive {d}: file {disks[d]} - not recognized")
+        else:
+            unit_info[disk_to_unit[d]]['type'] = 'LOCAL'
+            unit_info[disk_to_unit[d]]['file'] = ''
+            unit_info[disk_to_unit[d]]['last'] = 0
+
+        win.addstr(4*i + 5, 0, f"DSK:{d}: =  {unit_info[disk_to_unit[d]]['type']}:{unit_info[disk_to_unit[d]]['file']}")
+        win.addstr(4*i + 5, 35, f"Login/Warm boot to reload disk")
+        win.hline(4*i + 6, 0, '.', 77)
+
+    win.refresh()
+    # debug(unit_info)
+
 
 def build_directory(root):
 
@@ -217,7 +252,7 @@ def build_directory(root):
     # blkN = 2 # CALCULATE BASED ON dirsize
     blkN = (EXT_SZ * dpb['dirsize']) // dpb['blksize']
 
-    # print(len(dirdata))
+    # debug(len(dirdata))
     
     for i in d:
         s = i.stat().st_size
@@ -229,7 +264,7 @@ def build_directory(root):
             else:
                 outcome = '<IGNORED>'
 
-            print(f"{i.name:12} {s//1024:5}K {s//128:5} {outcome}")
+            info(f"{i.name:12} {s//1024:5}K {s//128:5} {outcome}")
             
         if S_ISDIR(i.stat().st_mode):
 
@@ -238,7 +273,7 @@ def build_directory(root):
             else:
                 outcome = '<IGNORED>'
 
-            print(f"{i.name:12} <DIR> {outcome}")
+            info(f"{i.name:12} <DIR> {outcome}")
 
             subd = os.path.join(root, i.name)
             sd = os.scandir(subd)
@@ -251,7 +286,7 @@ def build_directory(root):
                     cpmfile = f'{n[0]:8}'
                     cpmext = f'{n[1]:3}'
 
-                    # print(f"{cpmfile}.{cpmext} {size:6} {size//1024:5} {size//128:5}")
+                    # info(f"{cpmfile}.{cpmext} {size:6} {size//1024:5} {size//128:5}")
 
                     ext = [0] * 32
 
@@ -286,7 +321,7 @@ def build_directory(root):
                             nextext[16 + b] = blkN
                             blkN += 1
                         
-                        # print(nextext)
+                        # info(nextext)
 
                         for d in range(EXT_SZ):
                             dirdata[(dirI + d)] = nextext[d]
@@ -353,10 +388,10 @@ def parseDir(dirData):
             if dirExt[ 16 + a ]:
                 blkcount += 1
 
-        # print(f'Entry: {d:02} User: {user:02X} Filename: {filename} Ext(xl:xh): {xl:02X}:{xh:02X} Len(bc:rc): {bc}:{rc} Bps: {blkcount}')
+        # info(f'Entry: {d:02} User: {user:02X} Filename: {filename} Ext(xl:xh): {xl:02X}:{xh:02X} Len(bc:rc): {bc}:{rc} Bps: {blkcount}')
         
         if user != DEL_BYTE:
-            # print(f'Entry: {d:02} User: {user:02X} Filename: {filename} Ext(xl:xh): {xl:02X}:{xh:02X} Len(bc:rc): {bc}:{rc} Bps: {blkcount}')
+            # info(f'Entry: {d:02} User: {user:02X} Filename: {filename} Ext(xl:xh): {xl:02X}:{xh:02X} Len(bc:rc): {bc}:{rc} Bps: {blkcount}')
 
             if dir[user].get(filename) == None:
                 dir[user][filename] = { 'blocks': 0, "recs": 0, "data": [] }
@@ -368,16 +403,16 @@ def parseDir(dirData):
 
 
 # PRINT DIRECTORY
-def printDir(dir):
+def infoDir(dir):
     for u in range(16):
         if dir[u] != {}:
-            print()
-            print(f'User {u}:')
-            print()
-            print('Name         Bytes   Recs')
-            print('------------ ------ ------')
+            info()
+            info(f'User {u}:')
+            info()
+            info('Name         Bytes   Recs')
+            info('------------ ------ ------')
             for f in dir[u]:
-                print(f"{f} {((dir[u][f]['blocks'] * dpb['blksize'])//1024):5}K {dir[u][f]['recs']:5}")
+                info(f"{f} {((dir[u][f]['blocks'] * dpb['blksize'])//1024):5}K {dir[u][f]['recs']:5}")
 
 
 current_file = { 'file': '', 'mode': '', 'fd': None }
@@ -427,7 +462,7 @@ def dispFileSector(unit, trk, sec, mode):
 
 def writeFileSector(unit, trk, sec, data):
 
-    # print(f"IMAGE WRITE: {unit}:{trk}:{sec} {unit_info[unit]['file']}")
+    info(f"IMAGE WRITE: {unit}:{trk}:{sec} {unit_info[unit]['file']}")
     dispFileSector(unit, trk, sec, 'W')
 
     fd = open(unit_info[unit]['file'], 'r+b')
@@ -472,17 +507,17 @@ def check_dir_sec(unit, trk, sec, data):
             ext = i // EXT_SZ
             break
 
-    # print (ext)
+    # info (ext)
     if ext > -1:
         lext = ext + sec * (SEC_SZ // EXT_SZ)
     else:
-        print("NO DIRECTORY EXTENT HAS CHANGED")
+        warn("NO DIRECTORY EXTENT HAS CHANGED")
         return
 
-    # print(dext)
+    # info(dext)
     extpos = lext * EXT_SZ
-    # print('BEFORE:', dirdata[extpos: extpos + EXT_SZ])
-    # print('AFTER :', bytearray(data[ext * EXT_SZ:(ext + 1) * EXT_SZ]))
+    debug('BEFORE:', dirdata[extpos: extpos + EXT_SZ])
+    debug('AFTER :', bytearray(data[ext * EXT_SZ:(ext + 1) * EXT_SZ]))
 
     orig = {
         'user': dirdata[extpos],
@@ -504,25 +539,25 @@ def check_dir_sec(unit, trk, sec, data):
         'blocks': data[ext * EXT_SZ + 16 :ext * EXT_SZ + 32]
     }
 
-    # print(orig)
-    # print(new)
+    # info(orig)
+    # info(new)
 
     # DELETE
     if orig['user'] < 16 and new['user'] == DEL_BYTE:
         if new['xNum'] == 0:
-            print(f"DELETE FILE: {filename(orig['file'])}")
+            info(f"DELETE FILE: {filename(orig['file'])}")
             dispDirAction(unit, f"DELETE FILE: {orig['user']}:{filename(orig['file'])}")
             try:
                 os.remove(os.path.join(root, f"{orig['user']}", filename(orig['file'])))
             except:
                 pass
         else: # new['xNum'] > 0:
-            print(f"MARK DELETED EXTENT: {new['xNum']} for {orig['file']}")
+            info(f"MARK DELETED EXTENT: {new['xNum']} for {orig['file']}")
             dispDirAction(unit, f"DELETE LOGICAL EXTENT: {new['xNum']} for {orig['user']}:{filename(orig['file'])}")
     # CREATE
     elif orig['user'] == DEL_BYTE and new['user'] < 16:
         if new['xNum'] == 0:
-            print(f"CREATE FILE: {filename(new['file'])}")
+            info(f"CREATE FILE: {filename(new['file'])}")
             dispDirAction(unit, f"CREATE FILE: {new['user']}:{filename(new['file'])}")
             try:
                 fd = file_start(os.path.join(root, f"{new['user']}", filename(new['file'])), "xb")
@@ -530,12 +565,12 @@ def check_dir_sec(unit, trk, sec, data):
             except:
                 pass
         else: # new['xNum'] > 0:
-            print(f"ADD EXTENT: {new['xNum']} {new['file']}")
+            info(f"ADD EXTENT: {new['xNum']} {new['file']}")
             dispDirAction(unit, f"ADD LOGICAL EXTENT: {new['xNum']} for {new['user']}:{filename(new['file'])}")
     # RENAME
     elif new['file'] != orig['file']:
         if new['xNum'] == 0:
-            print(f"RENAME FILE: {filename(orig['file'])} to {filename(new['file'])}")
+            info(f"RENAME FILE: {filename(orig['file'])} to {filename(new['file'])}")
             dispDirAction(unit, f"RENAME FILE: {orig['user']}:{filename(orig['file'])} to {new['user']}:{filename(new['file'])}")
             try:
                 os.rename(os.path.join(root, f"{orig['user']}", filename(orig['file'])),
@@ -543,13 +578,13 @@ def check_dir_sec(unit, trk, sec, data):
             except:
                 pass
         else: # new['xNum'] > 0:
-            print(f"RENAME EXTENT: {new['xNum']} {orig['file']} to {new['file']}")
+            info(f"RENAME EXTENT: {new['xNum']} {orig['file']} to {new['file']}")
             dispDirAction(unit, f"RENAME LOGICAL EXTENT: {new['xNum']} from {orig['user']}:{filename(orig['file'])} to {new['user']}:{filename(new['file'])}")
     # ADD SECTORS/BLOCKS TO AN EXTENT
     else:
-        print(f"UPDATE EXTENT: {new['file']}")
+        info(f"UPDATE EXTENT: {new['file']}")
 
-        # print(unit_info[unit]['buffer'])
+        # info(unit_info[unit]['buffer'])
         unit_info[unit]['buffer'].sort(key=lsec)
 
         fd = file_start(os.path.join(root, f"{new['user']}", filename(new['file'])), 'r+b')
@@ -565,20 +600,20 @@ def check_dir_sec(unit, trk, sec, data):
                         else: # if NOT first extent, use first block in first extent as base
                             pos = (b['lsec'] - (dir[new['user']][filename(new['file'], False)]['data'][0] * 8)) * SEC_SZ
 
-                        # print(b['lsec'], new['xNum'], pos)
+                        # info(b['lsec'], new['xNum'], pos)
                         fd.seek(pos)
                         fd.write(b['data'])
                         b['blk'] = -1 # mark buffer entry as used
             # DETECT IF A NEW BLOCK HAS NO DATA IN THE BUFFER
             if not found and n != 0:
-                print(f"BAD BLOCK REF {n} - NO DATA AVAILABLE IN BUFFER")
+                warn(f"BAD BLOCK REF {n} - NO DATA AVAILABLE IN BUFFER")
         
         file_end()
 
         # TEST TO SEE IF ANY DATA REMAINS UNUSED IN THE BUFFER
         for b in unit_info[unit]['buffer']:
             if b['blk'] >= 0:
-                print(f"UNUSED DATA IN WRITE BUFFER blk={b['blk']} lsec={b['lsec']}")
+                warn(f"UNUSED DATA IN WRITE BUFFER blk={b['blk']} lsec={b['lsec']}")
         
         #EMPTY THE BUFFER
         unit_info[unit]['buffer'].clear()
@@ -613,7 +648,7 @@ def writeDirSector(unit, trk, sec, data):
     if trk < dpb['offset']:
 
         pos = (trk * dpb['sectors'] + sec) * SEC_SZ #??? TODO: does this need top go through trans[] ???
-        print(f"WRITE BOOT: {trk}:{sec} pos= {pos}")
+        info(f"WRITE BOOT: {trk}:{sec} pos= {pos}")
         dispDirSector(unit, trk, sec, 'W', 'B', '$BOOT')
 
         fd = file_start(os.path.join(root, '$BOOT'), 'r+b')
@@ -629,7 +664,7 @@ def writeDirSector(unit, trk, sec, data):
 
     # DIRECTORY
     if sec < ((dpb['dirsize'] * EXT_SZ) // SEC_SZ):
-        # print(f"WRITE DIR : {trk}:{sec}")
+        info(f"WRITE DIR : {trk}:{sec}")
         dispDirSector(unit, trk, sec, 'W', 'D', '<DIR>')
         check_dir_sec(unit, trk, sec, data)
     else:
@@ -642,7 +677,7 @@ def writeDirSector(unit, trk, sec, data):
                     fn = '.'.join(fn)
 
                     pos = (sec - (dir[u][f]['data'][0] * 8)) * SEC_SZ
-                    print(f"WRITE TO FILE BLOCK: {trk}:{sec} block:{blk} in file: {fn} pos: {pos}")
+                    info(f"WRITE TO FILE BLOCK: {trk}:{sec} block:{blk} in file: {fn} pos: {pos}")
                     dispDirSector(unit, trk, sec, 'W', f"{u:X}", f"{u}: {fn}")
 
                     fd = file_start(os.path.join(root, f'{u}', fn), 'r+b')
@@ -655,7 +690,7 @@ def writeDirSector(unit, trk, sec, data):
                 continue
             break
         else:
-            # print(f"WRITE TO EMPTY BLOCK: {trk}:{sec} block:{blk}")
+            info(f"WRITE TO EMPTY BLOCK: {trk}:{sec} block:{blk}")
             dispDirSector(unit, trk, sec, 'W', '#', '<BUFFERING>')
             unit_info[unit]['buffer'].append({ 'lsec': sec, 'blk': blk, 'data': data })
     return
@@ -671,7 +706,7 @@ def read_sector(unit, trk, sec):
 
 def readFileSector(unit, trk, sec):
 
-    # print(f"IMAGE READ: {unit}:{trk}:{sec} {unit_info[unit]['file']}")
+    info(f"IMAGE READ: {unit}:{trk}:{sec} {unit_info[unit]['file']}")
     dispFileSector(unit, trk, sec, 'R')
 
     fd = open(unit_info[unit]['file'], 'rb')
@@ -694,7 +729,7 @@ def readDirSector(unit, trk, sec):
 
     # BOOT TRACKS
     if trk < dpb['offset']:
-        # print(f"READ BOOT: {trk}:{sec}")
+        info(f"READ BOOT: {trk}:{sec}")
         dispDirSector(unit, trk, sec, 'R', 'B', '$BOOT')
 
         if boot:
@@ -715,7 +750,7 @@ def readDirSector(unit, trk, sec):
 
     # DIRECTORY
     if sec < ((dpb['dirsize'] * EXT_SZ) // SEC_SZ):
-        # print(f"READ DIR : {trk}:{sec}")
+        info(f"READ DIR : {trk}:{sec}")
         dispDirSector(unit, trk, sec, 'R', 'D', '<DIR>')
 
         file_end()
@@ -734,7 +769,7 @@ def readDirSector(unit, trk, sec):
                     fn = '.'.join(fn)
 
                     pos = (sec - (dir[u][f]['data'][0] * 8)) * SEC_SZ
-                    # print(f"READ FILE BLOCK: {trk}:{sec} block:{blk} in file: {fn} pos: {pos}")
+                    info(f"READ FILE BLOCK: {trk}:{sec} block:{blk} in file: {fn} pos: {pos}")
                     dispDirSector(unit, trk, sec, 'R', f"{u:X}", f"{u}: {fn}")
 
                     fd = file_start(os.path.join(root, f'{u}', fn), 'rb')
@@ -765,7 +800,7 @@ def disk_io(addr):
     sector = mem[4]
     dma_addr = (mem[6] << 8) + mem[5]
 
-    # print(f'{cmd_str[cmd]} {unit}:{track}:{sector} <-> {dma_addr:04X}')
+    # info(f'{cmd_str[cmd]} {unit}:{track}:{sector} <-> {dma_addr:04X}')
 
     if unit in list(unit_info):
 
@@ -800,7 +835,7 @@ def disk_io(addr):
         win.addstr(4*i + 5, 69, f"RES: {disk_res[0]:02X}")
         win.refresh()
         dma_put = sess.put(f'{hosturl}/dma?m={(addr + 1):04X}', data=disk_res)
-        # print(dma_put.status_code, dma_put.text)
+        # info(dma_put.status_code, dma_put.text)
 
         return 1
 
@@ -808,13 +843,14 @@ def disk_io(addr):
 
 if __name__ == "__main__":
     try:
+        logging.basicConfig(filename="trace.log", filemode="w", level=logging.INFO)
         curses.wrapper(main)
         # main(None)
     except KeyboardInterrupt:
-        # do nothing here
-        print("KEY INT")
+        logging.root.setLevel(logging.INFO)
+        debug("KEY INT")
         sess.close()
         sys_get = requests.delete(f'{hosturl}/io?p={FIF_PORT:02X}')
         if sys_get.status_code == 200:
-            print(f'De-registered on {sys_get.text}')
+            info(f'De-registered on {sys_get.text}')
         pass
