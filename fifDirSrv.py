@@ -325,6 +325,33 @@ def printDir(dir):
             for f in dir[u]:
                 print(f"{f} {((dir[u][f]['blocks'] * dpb['blksize'])//1024):5}K {dir[u][f]['recs']:5}")
 
+
+current_file = { 'file': '', 'mode': '', 'fd': None }
+
+def file_start(file, mode):
+
+    if file == current_file['file'] and mode == current_file['mode']:
+        return current_file['fd']
+    
+    if current_file['fd'] != None:
+        current_file['fd'].close()
+
+    current_file['file'] = file
+    current_file['mode'] = mode
+    current_file['fd'] = open(file, mode)
+
+    return current_file['fd']
+
+def file_end():
+
+    if current_file['fd'] != None:
+        current_file['fd'].close()
+
+    current_file['file'] = ''
+    current_file['mode'] = ''
+    current_file['fd'] = None
+
+
 def write_sector(unit, trk, sec, data):
 
     if unit_info[unit]['type'] == 'IMG':
@@ -417,8 +444,8 @@ def check_dir_sec(unit, trk, sec, data):
         if new['xl'] == 0:
             print(f"CREATE FILE: {filename(new['file'])}")
             try:
-                fd = open(os.path.join(root, f"{new['user']}", filename(new['file'])), "xb")
-                fd.close()
+                fd = file_start(os.path.join(root, f"{new['user']}", filename(new['file'])), "xb")
+                # file_end()
             except:
                 pass
         else: # new['xl'] > 0:
@@ -441,6 +468,7 @@ def check_dir_sec(unit, trk, sec, data):
         # print(unit_info[unit]['buffer'])
         unit_info[unit]['buffer'].sort(key=lsec)
 
+        fd = file_start(os.path.join(root, f"{new['user']}", filename(new['file'])), 'r+b')
         for n in new['blocks']:
             found = False 
             if n != orig['blocks'][new['blocks'].index(n)]:
@@ -452,15 +480,15 @@ def check_dir_sec(unit, trk, sec, data):
                         else: # if NOT first extent, use first block in first extent as base
                             pos = (b['lsec'] - (dir[new['user']][filename(new['file'], False)]['data'][0] * 8)) * SEC_SZ
 
-                        # print(b['lsec'], new['xl'], pos)
-                        fd = open(os.path.join(root, f"{new['user']}", filename(new['file'])), 'r+b')
+                        # print(b['lsec'], new['xNum'], pos)
                         fd.seek(pos)
                         fd.write(b['data'])
-                        fd.close()
                         b['blk'] = -1 # mark buffer entry as used
             # DETECT IF A NEW BLOCK HAS NO DATA IN THE BUFFER
             if not found and n != 0:
                 print(f"BAD BLOCK REF {n} - NO DATA AVAILABLE IN BUFFER")
+        
+        file_end()
 
         # TEST TO SEE IF ANY DATA REMAINS UNUSED IN THE BUFFER
         for b in unit_info[unit]['buffer']:
@@ -490,10 +518,10 @@ def writeDirSector(unit, trk, sec, data):
         pos = (trk * dpb['sectors'] + sec) * SEC_SZ #??? TODO: does this need top go through trans[] ???
         print(f"WRITE BOOT: {trk}:{sec} pos= {pos}")
 
-        fd = open(os.path.join(root, '$BOOT'), 'r+b')
+        fd = file_start(os.path.join(root, '$BOOT'), 'r+b')
         fd.seek(pos)
         fd.write(data)
-        fd.close()
+        # fd.close()
 
         return
 
@@ -517,10 +545,10 @@ def writeDirSector(unit, trk, sec, data):
                     pos = (sec - (dir[u][f]['data'][0] * 8)) * SEC_SZ
                     print(f"WRITE TO FILE BLOCK: {trk}:{sec} block:{blk} in file: {fn} pos: {pos}")
 
-                    fd = open(os.path.join(root, f'{u}', fn), 'r+b')
+                    fd = file_start(os.path.join(root, f'{u}', fn), 'r+b')
                     fd.seek(pos)
                     fd.write(data)
-                    fd.close()
+                    # fd.close()
 
                     break
             else:
@@ -566,12 +594,12 @@ def readDirSector(unit, trk, sec):
     if trk < dpb['offset']:
         # print(f"READ BOOT: {trk}:{sec}")
         if boot:
-            fd = open(os.path.join(root, '$BOOT'), 'rb')
+            fd = file_start(os.path.join(root, '$BOOT'), 'rb')
 
             pos = (trk * SPT8 + sec - 1) * SEC_SZ
             fd.seek(pos)
             data = fd.read(SEC_SZ)
-            fd.close()
+            # fd.close()
         else:
             data = bytearray(empty_sec)
 
@@ -584,6 +612,8 @@ def readDirSector(unit, trk, sec):
     # DIRECTORY
     if sec < ((dpb['dirsize'] * EXT_SZ) // SEC_SZ):
         # print(f"READ DIR : {trk}:{sec}")
+
+        file_end()
 
         pos = sec * SEC_SZ
         data = dirdata[pos: pos + SEC_SZ]
@@ -601,11 +631,11 @@ def readDirSector(unit, trk, sec):
                     pos = (sec - (dir[u][f]['data'][0] * 8)) * SEC_SZ
                     # print(f"READ FILE BLOCK: {trk}:{sec} block:{blk} in file: {fn} pos: {pos}")
 
-                    fd = open(os.path.join(root, f'{u}', fn), 'rb')
+                    fd = file_start(os.path.join(root, f'{u}', fn), 'rb')
 
                     fd.seek(pos)
                     data = fd.read(SEC_SZ)
-                    fd.close()
+                    # fd.close()
 
                     break
             else:
