@@ -44,8 +44,7 @@ SRV_PATH = srv
 hosturl = 'http://imsai8080'
 _srvurl = f'http://{socket.gethostname()}:{SRV_PORT}/{SRV_PATH}'
 
-# disks = { 'A': 'cpm22b01.unpacked', 'B': 'comms.unpacked', 'C': 'dazzler.unpacked', 'D': 'ZorkI.unpacked' }
-disks = { 'B': 'comms.unpacked', 'C': 'dazzler.unpacked', 'D': 'ZorkI.unpacked' }
+disks = { 'A': 'cpm22b01.unpacked', 'B': 'comms.unpacked', 'C': 'ws33.unpacked', 'D': 'ZorkI.unpacked' }
 disk_to_unit = { 'A': 1, 'B': 2, 'C': 4, 'D': 8 }
 unit_info = { }
 
@@ -53,6 +52,21 @@ sess = requests.Session()
 
 TMAX = 77
 win = None
+
+# class win:
+#     def addstr(*_):
+#         pass
+#     def addnstr(*_):
+#         pass
+#     def move(*_):
+#         pass
+#     def clrtoeol(*_):
+#         pass
+#     def hline(*_):
+#         pass
+#     def refresh():
+#         pass
+
 
 def print(*_):
     pass
@@ -795,6 +809,7 @@ def disk_io(addr):
 if __name__ == "__main__":
     try:
         curses.wrapper(main)
+        # main(None)
     except KeyboardInterrupt:
         # do nothing here
         print("KEY INT")
