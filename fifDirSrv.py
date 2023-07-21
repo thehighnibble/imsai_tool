@@ -207,21 +207,20 @@ def build_directory(root):
                     for n in range(3):
                         ext[n + 9] = ord(cpmext[n])
 
-                    # XL - extent number
-                    xl = 0
+                    # XL - extent number bits 0-4
+                    # XH - extent number bits 5-10
+                    xNum = 0
 
                     # BC - always ZERO for CPM22 - ignore
-
-                    # XH - always ZERO for CPM22 (?) - ignore
 
                     # RC - number of recs/secs in the extent
                     rc = size // SEC_SZ
 
                     while rc >= 0:
                         nextext = list(ext)
-                        nextext[12] = xl
+                        nextext[12] = xNum & 0x1F
                         # nextext[13] = 0
-                        # nextext[14] = 0
+                        nextext[14] = xNum >> 5
                         nextext[15] = rc if rc <= 128 else 128
 
                         ### ADD BLOCK POINTERS HERE
@@ -238,7 +237,7 @@ def build_directory(root):
                         
                         dirI += EXT_SZ
 
-                        xl += 1
+                        xNum += 1
                         rc -= 128    
 
     return ( boot, bytearray(dirdata) )
@@ -414,6 +413,8 @@ def check_dir_sec(unit, trk, sec, data):
         'user': dirdata[extpos],
         'file': bytes(dirdata[extpos + 1 : extpos + 12]),
         'xl': dirdata[extpos + 12],
+        'xh': dirdata[extpos + 14],
+        'xNum': (dirdata[extpos + 14] & 0x2F) << 5 | (dirdata[extpos + 12] & 0x1F),
         'rc': dirdata[extpos + 15],
         'blocks': bytes(dirdata[extpos + 16 :extpos + 32])
     }
@@ -422,6 +423,8 @@ def check_dir_sec(unit, trk, sec, data):
         'user': data[ext * EXT_SZ],
         'file': data[ext * EXT_SZ + 1 : ext * EXT_SZ + 12],
         'xl': data[ext * EXT_SZ + 12],
+        'xh': data[ext * EXT_SZ + 14],
+        'xNum': ((dirdata[extpos + 14] & 0x2F) << 5) | (dirdata[extpos + 12] & 0x1F),
         'rc': data[ext * EXT_SZ + 15],
         'blocks': data[ext * EXT_SZ + 16 :ext * EXT_SZ + 32]
     }
@@ -431,36 +434,36 @@ def check_dir_sec(unit, trk, sec, data):
 
     # DELETE
     if orig['user'] < 16 and new['user'] == DEL_BYTE:
-        if new['xl'] == 0:
+        if new['xNum'] == 0:
             print(f"DELETE FILE: {filename(orig['file'])}")
             try:
                 os.remove(os.path.join(root, f"{orig['user']}", filename(orig['file'])))
             except:
                 pass
-        else: # new['xl'] > 0:
-            print(f"MARK DELETED EXTENT: {new['xl']} for {orig['file']}")
+        else: # new['xNum'] > 0:
+            print(f"MARK DELETED EXTENT: {new['xNum']} for {orig['file']}")
     # CREATE
     elif orig['user'] == DEL_BYTE and new['user'] < 16:
-        if new['xl'] == 0:
+        if new['xNum'] == 0:
             print(f"CREATE FILE: {filename(new['file'])}")
             try:
                 fd = file_start(os.path.join(root, f"{new['user']}", filename(new['file'])), "xb")
                 # file_end()
             except:
                 pass
-        else: # new['xl'] > 0:
-            print(f"ADD EXTENT: {new['xl']} {new['file']}")
+        else: # new['xNum'] > 0:
+            print(f"ADD EXTENT: {new['xNum']} {new['file']}")
     # RENAME
     elif new['file'] != orig['file']:
-        if new['xl'] == 0:
+        if new['xNum'] == 0:
             print(f"RENAME FILE: {filename(orig['file'])} to {filename(new['file'])}")
             try:
                 os.rename(os.path.join(root, f"{orig['user']}", filename(orig['file'])),
                           os.path.join(root, f"{new['user']}", filename(new['file'])))
             except:
                 pass
-        else: # new['xl'] > 0:
-            print(f"RENAME EXTENT: {new['xl']} {orig['file']} to {new['file']}")
+        else: # new['xNum'] > 0:
+            print(f"RENAME EXTENT: {new['xNum']} {orig['file']} to {new['file']}")
     # ADD SECTORS/BLOCKS TO AN EXTENT
     else:
         print(f"UPDATE EXTENT: {new['file']}")
@@ -475,7 +478,7 @@ def check_dir_sec(unit, trk, sec, data):
                 for b in unit_info[unit]['buffer']:
                     if b['blk'] == n:
                         found = True
-                        if new['xl'] == 0: # if first extent, use first block as base
+                        if new['xNum'] == 0: # if first extent, use first block as base
                             pos = (b['lsec'] - (new['blocks'][0] * 8)) * SEC_SZ
                         else: # if NOT first extent, use first block in first extent as base
                             pos = (b['lsec'] - (dir[new['user']][filename(new['file'], False)]['data'][0] * 8)) * SEC_SZ
