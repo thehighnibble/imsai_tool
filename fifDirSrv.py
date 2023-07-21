@@ -14,6 +14,7 @@
 #
 #   TODO:
 #       - get disk map from a file or the command line
+#       - add text UI using CURSES module
 #       - add more error detection and return more error codes
 #
 #   known issues:
@@ -270,8 +271,7 @@ def filename(buf, strip = True):
 # PARSE DIRECTORY EXTENTS INTO dir ARRAY OF DICTIONARIES ie. USER:FILE.EXT
 def parseDir(dirData):
 
-    # dir = [ {} ] * 16
-    dir = [ {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {} ]
+    dir = [ {} for _ in range(16) ]
 
     for d in range(dpb['dirsize']):
 
