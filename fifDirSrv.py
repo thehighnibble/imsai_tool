@@ -58,23 +58,6 @@ sess = requests.Session()
 TMAX = 77
 win = None
 
-# class win:
-#     def addstr(*_):
-#         pass
-#     def addnstr(*_):
-#         pass
-#     def move(*_):
-#         pass
-#     def clrtoeol(*_):
-#         pass
-#     def hline(*_):
-#         pass
-#     def refresh():
-#         pass
-
-
-# def print(*_):
-#     pass
 
 def main(sc):
 
@@ -100,6 +83,7 @@ def main(sc):
         key = win.getkey()
         win.addstr(curses.LINES - 3, 1, f"KEY: <{key}>")
         win.clrtoeol()
+        win.refresh()
 
         if key == '^X':
             connect_to_host()
@@ -162,6 +146,7 @@ def fif_out(data):
             fdstate += 1
 
         win.addstr(2, 0, f"FIF DESC:{descno:X}")
+        win.clrtoeol()
         for i in range(16):
             win.addstr((i//8) + 2, (i%8) * 7 + 12, f"{i:X}:{fdaddr[i]:04X}")
 
