@@ -34,7 +34,7 @@ from stat import *
 import socket
 from simple_http_server import route, server, Response, ModelDict, logger as httpdlog
 from threading import Thread
-from logging import debug, info, warn, error
+from logging import debug, info, error, warning
 import logging
 
 httpdlog.set_level("ERROR")
@@ -511,7 +511,7 @@ def check_dir_sec(unit, trk, sec, data):
     if ext > -1:
         lext = ext + sec * (SEC_SZ // EXT_SZ)
     else:
-        warn("NO DIRECTORY EXTENT HAS CHANGED")
+        warning("NO DIRECTORY EXTENT HAS CHANGED")
         return
 
     # info(dext)
@@ -606,14 +606,14 @@ def check_dir_sec(unit, trk, sec, data):
                         b['blk'] = -1 # mark buffer entry as used
             # DETECT IF A NEW BLOCK HAS NO DATA IN THE BUFFER
             if not found and n != 0:
-                warn(f"BAD BLOCK REF {n} - NO DATA AVAILABLE IN BUFFER")
+                warning(f"BAD BLOCK REF {n} - NO DATA AVAILABLE IN BUFFER")
         
         file_end()
 
         # TEST TO SEE IF ANY DATA REMAINS UNUSED IN THE BUFFER
         for b in unit_info[unit]['buffer']:
             if b['blk'] >= 0:
-                warn(f"UNUSED DATA IN WRITE BUFFER blk={b['blk']} lsec={b['lsec']}")
+                warning(f"UNUSED DATA IN WRITE BUFFER blk={b['blk']} lsec={b['lsec']}")
         
         #EMPTY THE BUFFER
         unit_info[unit]['buffer'].clear()
