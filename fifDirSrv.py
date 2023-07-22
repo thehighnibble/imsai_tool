@@ -14,6 +14,7 @@
 #
 #   TODO:
 #       - normalize the use of trk:sec vs. linear sector
+#       - handle 16bit extent block pointers and large drives (ie. DSK:I:)
 #       - add more error detection and return more error codes
 #
 #   known issues:
@@ -205,6 +206,7 @@ def fif_out(data):
 cmd_str = [ "", "WRITE", "READ", "FORMAT", "VERIFY" ]
 
 DEL_BYTE = 0xE5
+EOF_BYTE = 0x1A
 EXT_SZ = 32
 SEC_SZ = 128
 SPT8 = 26
@@ -390,6 +392,9 @@ def build_directory(root):
 
                     # RC - number of recs/secs in the extent
                     rc = size // SEC_SZ
+                    # round up if not a full sector (even multiple)
+                    if size % SEC_SZ > 0:
+                        rc += 1
 
                     while rc >= 0:
                         nextext = list(ext)
@@ -806,6 +811,7 @@ def readFileSector(unit, trk, sec):
 def readDirSector(unit, trk, sec):
 
     empty_sec = [ DEL_BYTE ] * SEC_SZ
+    eof_sec = [ EOF_BYTE ] * SEC_SZ
     root = unit_info[unit]['file']
     boot = unit_info[unit]['boot']
     dirdata = unit_info[unit]['dirdata']
@@ -860,6 +866,13 @@ def readDirSector(unit, trk, sec):
 
                     fd.seek(pos)
                     data = fd.read(SEC_SZ)
+
+                    if len(data) < SEC_SZ:
+                        warning(f"SHORT FILE: {os.path.join(root, f'{u}', fn)} len={len(data)} - PADDED WITH EOF [0x1A]")
+                        tmp = bytearray(eof_sec)
+                        tmp[0:len(data)] = data[0:]
+                        data = tmp
+
                     # fd.close()
 
                     break
