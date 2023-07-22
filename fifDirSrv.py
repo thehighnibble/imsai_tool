@@ -13,9 +13,7 @@
 #       simple_http_server (module) - to install, use: pip install simple_http_server
 #
 #   TODO:
-#       - get disk map from a file or the command line
 #       - normalize the use of trk:sec vs. linear sector
-#       - implement logging
 #       - add more error detection and return more error codes
 #
 #   known issues:
@@ -36,6 +34,7 @@ from simple_http_server import route, server, Response, ModelDict, logger as htt
 from threading import Thread
 from logging import debug, info, error, warning
 import logging
+import json
 
 httpdlog.set_level("ERROR")
 
@@ -48,7 +47,9 @@ SRV_PATH = srv
 hosturl = 'http://imsai8080'
 _srvurl = f'http://{socket.gethostname()}:{SRV_PORT}/{SRV_PATH}'
 
-disks = { 'A': 'cpm22b01.unpacked', 'B': 'comms.unpacked', 'C': 'ws33.unpacked', 'D': 'ZorkI.unpacked' }
+diskmap_file = 'diskmap.json'
+
+disks = { }
 disk_to_unit = { 'A': 1, 'B': 2, 'C': 4, 'D': 8 }
 unit_info = { }
 
@@ -86,6 +87,8 @@ def main(sc):
     win = curses.newwin(curses.LINES - 2 , TMAX , 1, 1)
 
     load_diskmap()
+
+    process_diskmap()
 
     connect_to_host()
 
@@ -197,6 +200,22 @@ dpb = {
 }
 
 def load_diskmap():
+    global disks
+
+    try:
+        with open(diskmap_file, "r") as fp:
+            disks = json.load(fp) # Load the disks dict from the file
+        info(f"LOADED: {disks}")
+        win.addstr(2, 0, f"Loaded: {diskmap_file}")
+    except json.decoder.JSONDecodeError as e:
+        error(f'JSON error in {diskmap_file}: {e}')
+        sys.exit(f'JSON error in {diskmap_file}: {e}')
+    except FileNotFoundError:
+        warning(f'Diskmap file {diskmap_file} not found')
+        win.addstr(2, 0, f"*** Warning: no {diskmap_file} file found ***")
+
+
+def process_diskmap():
 
     win.move(5,0)
     win.clrtobot()
