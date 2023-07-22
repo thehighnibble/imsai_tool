@@ -79,16 +79,52 @@ def main(sc):
     th = Thread(target=server.start, args=("", SRV_PORT), daemon=True)
     th.start()
 
+    drive = None
+
     while True:
         key = win.getkey()
         win.addstr(curses.LINES - 3, 1, f"KEY: <{key}>")
         win.clrtoeol()
         win.refresh()
 
-        if key == '^X':
+        # info(f"KEY: {key} len={len(key)} ord={ord(key)}")
+        if key == chr(24): # ^X
             connect_to_host()
-        elif key == '^R':
-            load_diskmap()
+        elif key == chr(16): # ^P
+            info(f"PERSIST: {disks}")
+            with open(diskmap_file, "w") as fp:
+                json.dump(disks, fp)  # encode disks dict into JSON 
+            win.addstr(curses.LINES - 3, 12, f"SAVED TO {diskmap_file}")
+        elif key == chr(18): # ^R
+            info(f"RELOAD: {disks}")
+            load_diskmap()   
+            process_diskmap()
+        elif key == chr(21): # ^U
+            if drive in list(disks):
+                info(f"UNLOAD: DSK:{drive}: {disks[drive]}")        
+                disks.pop(drive)          
+                process_diskmap()
+        elif key == chr(12): # ^L
+            if drive in list(disk_to_unit):
+                info(f"LOAD: DSK:{drive}:")
+                # PROMPT USER FOR image/directory NAME USING TEXTBOX
+                win.addstr(curses.LINES - 3, 0, f"LOAD: DSK:{drive}: = ")
+                win.clrtoeol()
+                win.refresh()
+                curses.curs_set(1)
+                txtwin = curses.newwin(1 , TMAX - 32 , curses.LINES - 2, 16)
+                tb = curses.textpad.Textbox(txtwin, insert_mode=True)
+                txt = tb.edit()
+                curses.curs_set(0)
+                txt = txt.strip()
+                disks[drive] = txt
+                process_diskmap()
+        elif key in list(disk_to_unit):
+            drive = key
+            win.addstr(curses.LINES - 3, 10, f"DRIVE: DSK:{drive}:")
+            continue
+
+        drive = None
         
 
 @route(f'/{SRV_PATH}', method="PUT")
