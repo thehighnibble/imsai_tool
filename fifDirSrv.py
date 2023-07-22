@@ -245,6 +245,37 @@ def process_diskmap():
     # debug(unit_info)
 
 
+def shorten(name, list):
+
+    tx = str.maketrans("<>.,;:=?*[]%|()/\\_", "                  ")
+
+    f, e = os.path.splitext(name)
+
+    file = f.upper().translate(tx).replace(' ', '')
+    ext = '.' + e[1:].upper().translate(tx).replace(' ', '')
+
+    tail = 0
+
+    if len(file) > 8:
+        tail += 1
+        file = f"{file[0:6]}~{tail:X}"
+    ext = ext[0:4]
+
+    shortname = file + ext
+
+    while tail and (shortname in list) and tail < 15:
+        tail += 1
+        shortname = f"{file[0:7]}{tail:X}{ext}"
+    
+    if tail == 16:
+        error(f'TOO MANY FILES WITH THE SAME SHORT NAME: {shortname}')
+
+    if shortname != name:
+        list[list.index(name)] = shortname
+
+    return shortname
+
+
 def build_directory(root):
 
     boot = False
@@ -281,12 +312,25 @@ def build_directory(root):
 
             subd = os.path.join(root, i.name)
             sd = os.scandir(subd)
+            files = list(sd)
+            names = [ f.name for f in files ]
 
-            for f in sd:
+            for f in files:
+
                 size = f.stat().st_size
-                if S_ISREG(f.stat().st_mode):
+                mode = f.stat().st_mode
+                name = shorten(f.name, names)
 
-                    n = f.name.split('.')
+                if name != f.name:
+                    try:
+                        os.rename(os.path.join(root, i.name, f.name), os.path.join(root, i.name, name))
+                        warning(f'RENAMED FILE: {f.name} to {name}')
+                    except:
+                        error(f"FAILED TO RENAME {f.name} to {name}")
+
+                if S_ISREG(mode):
+
+                    n = name.split('.')
                     cpmfile = f'{n[0]:8}'
                     cpmext = f'{n[1]:3}'
 
