@@ -51,8 +51,7 @@ _srvurl = f'http://{socket.gethostname()}:{SRV_PORT}/{SRV_PATH}'
 diskmap_file = 'diskmap.json'
 
 disks = { }
-disk_to_unit = { 'A': 1, 'B': 2, 'C': 4, 'D': 8 }
-unit_info = { }
+disk_to_unit = { 'A': 1, 'B': 2, 'C': 4, 'D': 8, 'I': 15 }
 
 sess = requests.Session()
 
@@ -170,7 +169,7 @@ def fif_out(data):
 
     res = 0
 
-    win.addstr(1, 0, 'RECV', curses.A_REVERSE)
+    win.addstr(2, 0, 'RECV', curses.A_REVERSE)
     win.refresh()
 
     if fdstate == 0:
@@ -182,10 +181,12 @@ def fif_out(data):
             descno = data & 0x0F
             fdstate += 1
 
-        win.addstr(2, 0, f"FIF DESC:{descno:X}")
+        win.addstr(1, 0, f"FIF DESC:{descno:X}")
+        win.clrtoeol()
+        win.move(2,4)
         win.clrtoeol()
         for i in range(16):
-            win.addstr((i//8) + 2, (i%8) * 7 + 12, f"{i:X}:{fdaddr[i]:04X}")
+            win.addstr((i//8) + 1, (i%8) * 7 + 12, f"{i:X}:{fdaddr[i]:04X}", curses.A_BOLD if i == descno else curses.A_NORMAL)
 
     elif fdstate == 1:
         fdaddr[descno] = data
@@ -198,8 +199,7 @@ def fif_out(data):
         error(f'Internal error fdstate={fdstate}')
         fdstate = 0
 
-    win.move(1, 0)
-    win.clrtoeol()
+    win.addstr(2, 0, '    ')
     win.refresh()
     return res
 
@@ -209,11 +209,10 @@ DEL_BYTE = 0xE5
 EOF_BYTE = 0x1A
 EXT_SZ = 32
 SEC_SZ = 128
-SPT8 = 26
 
-trans = [ 1,7,13,19,25,5,11,17,23,3,9,15,21,2,8,14,20,26,6,12,18,24,4,10,16,22 ]
+trans8 = [ 1,7,13,19,25,5,11,17,23,3,9,15,21,2,8,14,20,26,6,12,18,24,4,10,16,22 ]
 
-dpb = { 
+dpb8 = { 
     'sectors': 26,
     'blksize': 1024,
     'dirsize': 64,
@@ -221,6 +220,26 @@ dpb = {
     'offset': 2,
     'tracks': 77
 }
+
+dpbHD = { 
+    'sectors': 128,
+    'blksize': 2048,
+    'dirsize': 1024,
+    'disksize': 2040,
+    'offset': 0,
+    'tracks': 255
+}
+
+dph = { 
+    1: { 'dpb': dpb8, 'trans': trans8 },
+    2: { 'dpb': dpb8, 'trans': trans8 },
+    4: { 'dpb': dpb8, 'trans': trans8 },
+    8: { 'dpb': dpb8, 'trans': trans8 },
+    15: { 'dpb': dpbHD }
+}
+
+unit_info = { }
+
 
 def load_diskmap():
     global disks
@@ -252,18 +271,23 @@ def process_diskmap():
             dstat = os.stat(disks[d])
 
             if S_ISREG(dstat.st_mode):
+                info(f'DSK:{d}: = IMAGE: {disks[d]}')
                 unit_info[disk_to_unit[d]]['type'] = 'IMG'
                 unit_info[disk_to_unit[d]]['file'] = disks[d]
+                unit_info[disk_to_unit[d]]['dpb'] = dph[disk_to_unit[d]]['dpb']
+                if 'trans' in dph[disk_to_unit[d]]:
+                    unit_info[disk_to_unit[d]]['trans'] = dph[disk_to_unit[d]]['trans']
                 unit_info[disk_to_unit[d]]['last'] = 0
-                info(f'DSK:{d}: = IMAGE: {disks[d]}')
             elif S_ISDIR(dstat.st_mode):
                 info(f'DSK:{d}: = PATH : {disks[d]}')
-                (boot, data) = build_directory(disks[d])
-                dir = parseDir(data)
-                # infoDir(dir)
                 unit_info[disk_to_unit[d]]['type'] = 'DIR'
                 unit_info[disk_to_unit[d]]['file'] = disks[d]
+                unit_info[disk_to_unit[d]]['dpb'] = dph[disk_to_unit[d]]['dpb']
+                if 'trans' in dph[disk_to_unit[d]]:
+                    unit_info[disk_to_unit[d]]['trans'] = dph[disk_to_unit[d]]['trans']
                 unit_info[disk_to_unit[d]]['last'] = 0
+                (boot, data) = build_directory(disks[d], unit_info[disk_to_unit[d]]['dpb'])
+                dir = parseDir(data)
                 unit_info[disk_to_unit[d]]['boot'] = boot
                 unit_info[disk_to_unit[d]]['dirdata'] = data
                 unit_info[disk_to_unit[d]]['dir'] = dir
@@ -273,11 +297,19 @@ def process_diskmap():
         else:
             unit_info[disk_to_unit[d]]['type'] = 'LOCAL'
             unit_info[disk_to_unit[d]]['file'] = ''
+            unit_info[disk_to_unit[d]]['dpb'] = dph[disk_to_unit[d]]['dpb']
             unit_info[disk_to_unit[d]]['last'] = 0
 
-        win.addstr(4*i + 5, 0, f"DSK:{d}: =  {unit_info[disk_to_unit[d]]['type']}:{unit_info[disk_to_unit[d]]['file']}")
-        win.addstr(4*i + 5, 35, f"Login/Warm boot to reload disk")
-        win.hline(4*i + 6, 0, '.', 77)
+        tscale = 0
+        while (unit_info[disk_to_unit[d]]['dpb']['tracks'] >> tscale) > TMAX:
+            tscale += 1
+        unit_info[disk_to_unit[d]]['scale'] = tscale
+
+        win.addstr(4*i + 3, 0, f"DSK:{d}: =  {unit_info[disk_to_unit[d]]['type']}:{unit_info[disk_to_unit[d]]['file']}")
+        win.addstr(4*i + 3, 35, f"Login/Warm boot to reload disk")
+        win.hline(4*i + 4, 0, '.', unit_info[disk_to_unit[d]]['dpb']['tracks'] >> tscale)
+        if tscale:
+            win.addstr(4*i + 4, (unit_info[disk_to_unit[d]]['dpb']['tracks'] >> tscale), f' [x{1 << tscale}]')
 
     win.refresh()
     # debug(unit_info)
@@ -314,7 +346,7 @@ def shorten(name, list):
     return shortname
 
 
-def build_directory(root):
+def build_directory(root, dpb):
 
     boot = False
     dirdata = [ DEL_BYTE ] * (EXT_SZ * dpb['dirsize'])
@@ -322,11 +354,8 @@ def build_directory(root):
     d = os.scandir(root)
 
     dirI = 0
-    # blkN = 2 # CALCULATE BASED ON dirsize
     blkN = (EXT_SZ * dpb['dirsize']) // dpb['blksize']
 
-    # debug(len(dirdata))
-    
     for i in d:
         s = i.stat().st_size
         if S_ISREG(i.stat().st_mode):
@@ -348,9 +377,7 @@ def build_directory(root):
 
             info(f"{i.name:12} <DIR> {outcome}")
 
-            subd = os.path.join(root, i.name)
-            sd = os.scandir(subd)
-            files = list(sd)
+            files = list(os.scandir(os.path.join(root, i.name)))
             names = [ f.name for f in files ]
 
             for f in files:
@@ -368,9 +395,9 @@ def build_directory(root):
 
                 if S_ISREG(mode):
 
-                    n = name.split('.')
-                    cpmfile = f'{n[0]:8}'
-                    cpmext = f'{n[1]:3}'
+                    f, e = os.path.splitext(name)
+                    cpmfile = f'{f:8}'
+                    cpmext = f'{e[1:]:3}'
 
                     # info(f"{cpmfile}.{cpmext} {size:6} {size//1024:5} {size//128:5}")
 
@@ -378,11 +405,8 @@ def build_directory(root):
 
                     ext[0] = int(i.name)
 
-                    for m in range(8):
-                        ext[m + 1] = ord(cpmfile[m])
-
-                    for n in range(3):
-                        ext[n + 9] = ord(cpmext[n])
+                    ext[1:9] = [ord(c) for c in cpmfile]
+                    ext[9:12] = [ord(c) for c in cpmext]
 
                     # XL - extent number bits 0-4
                     # XH - extent number bits 5-10
@@ -391,10 +415,8 @@ def build_directory(root):
                     # BC - always ZERO for CPM22 - ignore
 
                     # RC - number of recs/secs in the extent
-                    rc = size // SEC_SZ
                     # round up if not a full sector (even multiple)
-                    if size % SEC_SZ > 0:
-                        rc += 1
+                    rc = size // SEC_SZ + ( 1 if (size % SEC_SZ) else 0)
 
                     while rc >= 0:
                         nextext = list(ext)
@@ -413,9 +435,9 @@ def build_directory(root):
                         # info(nextext)
 
                         for d in range(EXT_SZ):
-                            dirdata[(dirI + d)] = nextext[d]
+                            dirdata[(dirI * EXT_SZ + d)] = nextext[d]
                         
-                        dirI += EXT_SZ
+                        dirI += 1
 
                         xNum += 1
                         rc -= 128    
@@ -452,7 +474,7 @@ def parseDir(dirData):
 
     dir = [ {} for _ in range(16) ]
 
-    for d in range(dpb['dirsize']):
+    for d in range(len(dirData) // EXT_SZ):
 
         dirExt = dirData[ d * EXT_SZ : (d + 1) * EXT_SZ ]
 
@@ -539,14 +561,22 @@ def write_sector(unit, trk, sec, data):
 
 def dispFileSector(unit, trk, sec, mode):
 
+    dpb = unit_info[unit]['dpb']
+    tscale = unit_info[unit]['scale']
     i = list(unit_info).index(unit)
-    win.addstr(4*i + 6, unit_info[unit]['last'], '.')
-    win.addstr(4*i + 7, unit_info[unit]['last'], ' ')
+    win.addstr(4*i + 4, unit_info[unit]['last'] >> tscale, '.')
+    win.addstr(4*i + 5, unit_info[unit]['last'] >> tscale, ' ')
     unit_info[unit]['last'] = trk
-    win.addstr(4*i + 6, trk, mode)
-    dtest = ((trk - dpb['offset']) * SPT8 + trans.index(sec)) < (dpb['dirsize'] * EXT_SZ // SEC_SZ)
+    win.addstr(4*i + 4, trk >> tscale, mode)
+
+    if 'trans' in unit_info[unit]:
+        tsec = unit_info[unit]['trans'].index(sec)
+    else:
+        tsec = sec
+
+    dtest = ((trk - dpb['offset']) * dpb['sectors'] + tsec) < (dpb['dirsize'] * EXT_SZ // SEC_SZ)
     ind = 'B' if trk < dpb['offset'] else 'D' if dtest else 'E' 
-    win.addstr(4*i + 7, trk, ind)
+    win.addstr(4*i + 5, trk >> tscale, ind)
     win.refresh()
 
 def writeFileSector(unit, trk, sec, data):
@@ -554,9 +584,11 @@ def writeFileSector(unit, trk, sec, data):
     info(f"IMAGE WRITE: {unit}:{trk}:{sec} {unit_info[unit]['file']}")
     dispFileSector(unit, trk, sec, 'W')
 
+    dpb = unit_info[unit]['dpb']
+
     fd = open(unit_info[unit]['file'], 'r+b')
 
-    pos = (trk * SPT8 + sec - 1) * SEC_SZ
+    pos = (trk * dpb['sectors'] + sec - 1) * SEC_SZ
 
     fd.seek(pos)
     fd.write(data)
@@ -567,7 +599,7 @@ def lsec(e):
 
 def dispDirAction(unit, desc):
     i = list(unit_info).index(unit)
-    win.addstr(4*i + 8, 0, f"<DIR> - {desc}")
+    win.addstr(4*i + 6, 0, f"<DIR> - {desc}")
     win.clrtoeol()
     win.refresh()
 
@@ -717,18 +749,20 @@ def check_dir_sec(unit, trk, sec, data):
 
 def dispDirSector(unit, trk, sec, mode, type, desc):
     i = list(unit_info).index(unit)
-    win.addstr(4*i + 6, unit_info[unit]['last'], '.')
-    win.addstr(4*i + 7, unit_info[unit]['last'], ' ')
+    tscale = unit_info[unit]['scale']
+    win.addstr(4*i + 4, unit_info[unit]['last'] >> tscale, '.')
+    win.addstr(4*i + 5, unit_info[unit]['last'] >> tscale, ' ')
     unit_info[unit]['last'] = trk
-    win.addstr(4*i + 6, trk, mode)
-    win.addstr(4*i + 7, trk, type)
-    win.addstr(4*i + 8, 0, desc)
+    win.addstr(4*i + 4, trk >> tscale, mode)
+    win.addstr(4*i + 5, trk >> tscale, type)
+    win.addstr(4*i + 6, 0, desc)
     win.clrtoeol()
     win.refresh()
 
 
 def writeDirSector(unit, trk, sec, data):
 
+    dpb = unit_info[unit]['dpb']
     root = unit_info[unit]['file']
     # dirdata = unit_info[unit]['dirdata']
     dir = unit_info[unit]['dir']
@@ -736,18 +770,25 @@ def writeDirSector(unit, trk, sec, data):
     # BOOT TRACKS
     if trk < dpb['offset']:
 
-        pos = (trk * dpb['sectors'] + sec) * SEC_SZ #??? TODO: does this need top go through trans[] ???
+        pos = (trk * dpb['sectors'] + sec - 1) * SEC_SZ
         info(f"WRITE BOOT: {trk}:{sec} pos= {pos}")
         dispDirSector(unit, trk, sec, 'W', 'B', '$BOOT')
+
+        if pos == 0:
+            fd = file_start(os.path.join(root, '$BOOT'), 'xb')
+            file_end()
 
         fd = file_start(os.path.join(root, '$BOOT'), 'r+b')
         fd.seek(pos)
         fd.write(data)
+        file_end()
         # fd.close()
 
         return
 
-    sec = trans.index(sec)
+    if 'trans' in unit_info[unit]:
+        sec = unit_info[unit]['trans'].index(sec)
+
     sec = (trk - dpb['offset']) * dpb['sectors'] + sec
     blk = sec // 8
 
@@ -798,9 +839,11 @@ def readFileSector(unit, trk, sec):
     info(f"IMAGE READ: {unit}:{trk}:{sec} {unit_info[unit]['file']}")
     dispFileSector(unit, trk, sec, 'R')
 
+    dpb = unit_info[unit]['dpb']
+
     fd = open(unit_info[unit]['file'], 'rb')
 
-    pos = (trk * SPT8 + sec - 1) * SEC_SZ
+    pos = (trk * dpb['sectors'] + sec - 1) * SEC_SZ
     fd.seek(pos)
     data = fd.read(SEC_SZ)
     
@@ -816,6 +859,7 @@ def readDirSector(unit, trk, sec):
     boot = unit_info[unit]['boot']
     dirdata = unit_info[unit]['dirdata']
     dir = unit_info[unit]['dir']
+    dpb = unit_info[unit]['dpb']
 
     # BOOT TRACKS
     if trk < dpb['offset']:
@@ -825,7 +869,7 @@ def readDirSector(unit, trk, sec):
         if boot:
             fd = file_start(os.path.join(root, '$BOOT'), 'rb')
 
-            pos = (trk * SPT8 + sec - 1) * SEC_SZ
+            pos = (trk * dpb['sectors'] + sec - 1) * SEC_SZ
             fd.seek(pos)
             data = fd.read(SEC_SZ)
             # fd.close()
@@ -834,7 +878,9 @@ def readDirSector(unit, trk, sec):
 
         return data
 
-    sec = trans.index(sec)
+    if 'trans' in unit_info[unit]:
+        sec = unit_info[unit]['trans'].index(sec)
+
     sec = (trk - dpb['offset']) * dpb['sectors'] + sec
     blk = sec // 8
 
@@ -902,7 +948,7 @@ def disk_io(addr):
     if unit in list(unit_info):
 
         i = list(unit_info).index(unit)
-        win.addstr(4*i + 5, 35, f"{cmd_str[cmd]:6} TRK:{(track+1):3} SEC:{sector:3} DMA: {dma_addr:04X}h")
+        win.addstr(4*i + 3, 35, f"{cmd_str[cmd]:6} TRK:{(track+1):3} SEC:{sector:3} DMA: {dma_addr:04X}h")
         win.refresh()
         if unit_info[unit]['type'] == 'LOCAL':
 
@@ -929,7 +975,7 @@ def disk_io(addr):
         else: 
             disk_res = bytes.fromhex('A1')
 
-        win.addstr(4*i + 5, 69, f"RES: {disk_res[0]:02X}")
+        win.addstr(4*i + 3, 69, f"RES: {disk_res[0]:02X}")
         win.refresh()
         dma_put = sess.put(f'{hosturl}/dma?m={(addr + 1):04X}', data=disk_res)
         # info(dma_put.status_code, dma_put.text)
@@ -940,12 +986,13 @@ def disk_io(addr):
 
 if __name__ == "__main__":
     try:
-        logging.basicConfig(filename="trace.log", filemode="w", level=logging.INFO)
+        logging.basicConfig(filename="trace.log", filemode="w", level=logging.WARNING)
         curses.wrapper(main)
         # main(None)
     except KeyboardInterrupt:
         logging.root.setLevel(logging.INFO)
         debug("KEY INT")
+        file_end()
         sess.close()
         sys_get = requests.delete(f'{hosturl}/io?p={FIF_PORT:02X}')
         if sys_get.status_code == 200:
