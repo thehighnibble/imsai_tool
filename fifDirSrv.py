@@ -14,7 +14,6 @@
 #
 #   TODO:
 #       - normalize the use of trk:sec vs. linear sector
-#       - handle 16bit extent block pointers and large drives (ie. DSK:I:)
 #       - add more error detection and return more error codes
 #
 #   known issues:
@@ -287,11 +286,13 @@ def process_diskmap():
                     unit_info[disk_to_unit[d]]['trans'] = dph[disk_to_unit[d]]['trans']
                 unit_info[disk_to_unit[d]]['last'] = 0
                 (boot, data) = build_directory(disks[d], unit_info[disk_to_unit[d]]['dpb'])
-                dir = parseDir(data)
+                dir = parseDir(data, 1 if dph[disk_to_unit[d]]['dpb']['disksize'] > 255 else 0)
                 unit_info[disk_to_unit[d]]['boot'] = boot
                 unit_info[disk_to_unit[d]]['dirdata'] = data
                 unit_info[disk_to_unit[d]]['dir'] = dir
                 unit_info[disk_to_unit[d]]['buffer'] = [ ]
+
+                printDir(dir, dph[disk_to_unit[d]]['dpb']['blksize'])
             else:
                 sys.exit(f"FAILED drive {d}: file {disks[d]} - not recognized")
         else:
@@ -374,6 +375,8 @@ def build_directory(root, dpb):
                 outcome = f'USER: {i.name}'
             else:
                 outcome = '<IGNORED>'
+                info(f"{i.name:12} <DIR> {outcome}")
+                continue
 
             info(f"{i.name:12} <DIR> {outcome}")
 
@@ -426,12 +429,18 @@ def build_directory(root, dpb):
                         nextext[15] = rc if rc <= 128 else 128
 
                         ### ADD BLOCK POINTERS HERE
-                        bc = (nextext[15] // 8) + (1 if (nextext[15] % 8) else 0)
+                        numRec = dpb['blksize'] // SEC_SZ
+                        bc = (nextext[15] // numRec) + (1 if (nextext[15] % numRec) else 0)
 
                         for b in range(bc):
-                            nextext[16 + b] = blkN
+                            if dpb['disksize'] > 255:
+                                nextext[16 + b*2] = blkN & 0xFF
+                                nextext[17 + b*2] = blkN >> 8
+                            else:
+                                nextext[16 + b] = blkN
+
                             blkN += 1
-                        
+                            
                         # info(nextext)
 
                         for d in range(EXT_SZ):
@@ -470,7 +479,7 @@ def filename(buf, strip = True):
 
 
 # PARSE DIRECTORY EXTENTS INTO dir ARRAY OF DICTIONARIES ie. USER:FILE.EXT
-def parseDir(dirData):
+def parseDir(dirData, blkMode):
 
     dir = [ {} for _ in range(16) ]
 
@@ -491,18 +500,25 @@ def parseDir(dirData):
         bc = dirExt[ 13 ]
         xh = dirExt[ 14 ]
         rc = dirExt[ 15 ]
-        blocks = dirExt[ 16 : 32 ]
 
         blkcount = 0
+        if blkMode:
+            blocks = []
+            for b in range(0, 16, 2):
+                bp = dirExt[ 16 + b ] | (dirExt[ 17 + b ] << 8)
+                if bp:
+                    blkcount += 1
+                blocks.append(bp)
+        else:
+            blocks = dirExt[ 16 : 32 ]
+            for a in range(16):
+                if dirExt[ 16 + a ]:
+                    blkcount += 1
 
-        for a in range(16):
-            if dirExt[ 16 + a ]:
-                blkcount += 1
+        # info(f'Entry: {d:02} User: {user:02X} Filename: {filename} Ext(xl:xh): {xl:02X}:{xh:02X} Len(bc:rc): {bc}:{rc} Bps: {list(blocks)}')
 
-        # info(f'Entry: {d:02} User: {user:02X} Filename: {filename} Ext(xl:xh): {xl:02X}:{xh:02X} Len(bc:rc): {bc}:{rc} Bps: {blkcount}')
-        
         if user != DEL_BYTE:
-            # info(f'Entry: {d:02} User: {user:02X} Filename: {filename} Ext(xl:xh): {xl:02X}:{xh:02X} Len(bc:rc): {bc}:{rc} Bps: {blkcount}')
+            # info(f'Entry: {d:02} User: {user:02X} Filename: {filename} Ext(xl:xh): {xl:02X}:{xh:02X} Len(bc:rc): {bc}:{rc} Bps: {list(blocks)}')
 
             if dir[user].get(filename) == None:
                 dir[user][filename] = { 'blocks': 0, "recs": 0, "data": [] }
@@ -514,16 +530,17 @@ def parseDir(dirData):
 
 
 # PRINT DIRECTORY
-def infoDir(dir):
+def printDir(dir, blksize):
     for u in range(16):
         if dir[u] != {}:
-            info()
+            info('')
             info(f'User {u}:')
-            info()
+            info('')
             info('Name         Bytes   Recs')
             info('------------ ------ ------')
             for f in dir[u]:
-                info(f"{f} {((dir[u][f]['blocks'] * dpb['blksize'])//1024):5}K {dir[u][f]['recs']:5}")
+                size = dir[u][f]['blocks']*(blksize//1024)
+                info(f"{f} {size:5}K {dir[u][f]['recs']:5}")
 
 
 current_file = { 'file': '', 'mode': '', 'fd': None }
@@ -572,7 +589,7 @@ def dispFileSector(unit, trk, sec, mode):
     if 'trans' in unit_info[unit]:
         tsec = unit_info[unit]['trans'].index(sec)
     else:
-        tsec = sec
+        tsec = sec - 1
 
     dtest = ((trk - dpb['offset']) * dpb['sectors'] + tsec) < (dpb['dirsize'] * EXT_SZ // SEC_SZ)
     ind = 'B' if trk < dpb['offset'] else 'D' if dtest else 'E' 
@@ -613,7 +630,10 @@ def check_dir_sec(unit, trk, sec, data):
     root = unit_info[unit]['file']
     dirdata = unit_info[unit]['dirdata']
     dir = unit_info[unit]['dir']
+    dpb = unit_info[unit]['dpb']
 
+    numRec = dpb['blksize'] // SEC_SZ
+ 
     # diff = [ 0 ] * SEC_SZ
 
     pos = sec * SEC_SZ
@@ -647,8 +667,17 @@ def check_dir_sec(unit, trk, sec, data):
         'xh': dirdata[extpos + 14],
         'xNum': ((dirdata[extpos + 14] & 0x2F) << 5) | (dirdata[extpos + 12] & 0x1F),
         'rc': dirdata[extpos + 15],
-        'blocks': bytes(dirdata[extpos + 16 :extpos + 32])
+        # 'blocks': bytes(dirdata[extpos + 16 :extpos + 32])
     }
+
+    if dpb['disksize'] > 255:
+        blocks = []
+        for b in range(0, 16, 2):
+            bp = dirdata[extpos + 16 + b ] | (dirdata[extpos + 17 + b] << 8)
+            blocks.append(bp)
+        orig['blocks'] = blocks
+    else:
+        orig['blocks'] = bytes(dirdata[extpos + 16 :extpos + 32])
 
     new = {
         'user': data[ext * EXT_SZ],
@@ -657,8 +686,17 @@ def check_dir_sec(unit, trk, sec, data):
         'xh': data[ext * EXT_SZ + 14],
         'xNum': ((data[ext * EXT_SZ + 14] & 0x2F) << 5) | (data[ext * EXT_SZ + 12] & 0x1F),
         'rc': data[ext * EXT_SZ + 15],
-        'blocks': data[ext * EXT_SZ + 16 :ext * EXT_SZ + 32]
+        # 'blocks': data[ext * EXT_SZ + 16 :ext * EXT_SZ + 32]
     }
+
+    if dpb['disksize'] > 255:
+        blocks = []
+        for b in range(0, 16, 2):
+            bp = data[ext * EXT_SZ + 16 + b ] | (data[ext * EXT_SZ + 17 + b] << 8)
+            blocks.append(bp)
+        new['blocks'] = blocks
+    else:
+        new['blocks'] = data[ext * EXT_SZ + 16 :ext * EXT_SZ + 32]
 
     # info(orig)
     # info(new)
@@ -703,7 +741,7 @@ def check_dir_sec(unit, trk, sec, data):
             dispDirAction(unit, f"RENAME LOGICAL EXTENT: {new['xNum']} from {orig['user']}:{filename(orig['file'])} to {new['user']}:{filename(new['file'])}")
     # ADD SECTORS/BLOCKS TO AN EXTENT
     else:
-        info(f"UPDATE EXTENT: {new['file']}")
+        info(f"UPDATE EXTENT: {new['file']} {new['xNum']}")
 
         # info(unit_info[unit]['buffer'])
         unit_info[unit]['buffer'].sort(key=lsec)
@@ -717,9 +755,9 @@ def check_dir_sec(unit, trk, sec, data):
                         dispDirAction(unit, f"WRITE BUFFERED BLOCK TO DISK: {b['blk']} to {new['user']}:{filename(new['file'])}")
                         found = True
                         if new['xNum'] == 0: # if first extent, use first block as base
-                            pos = (b['lsec'] - (new['blocks'][0] * 8)) * SEC_SZ
+                            pos = (b['lsec'] - (new['blocks'][0] * numRec)) * SEC_SZ
                         else: # if NOT first extent, use first block in first extent as base
-                            pos = (b['lsec'] - (dir[new['user']][filename(new['file'], False)]['data'][0] * 8)) * SEC_SZ
+                            pos = (b['lsec'] - (dir[new['user']][filename(new['file'], False)]['data'][0] * numRec)) * SEC_SZ
 
                         # info(b['lsec'], new['xNum'], pos)
                         fd.seek(pos)
@@ -744,7 +782,7 @@ def check_dir_sec(unit, trk, sec, data):
     #     dirdata[extpos + i ] = data[ext * EXT_SZ + i]
     dirdata[extpos: extpos + EXT_SZ] = data[ext * EXT_SZ: (ext + 1) * EXT_SZ]
     #unit_info[unit]['dirdata'] = dirdata # not needed as lists are by reference not copied
-    unit_info[unit]['dir'] = parseDir(dirdata)
+    unit_info[unit]['dir'] = parseDir(dirdata, 1 if unit_info[unit]['dpb']['disksize'] > 255 else 0)
 
 
 def dispDirSector(unit, trk, sec, mode, type, desc):
@@ -788,9 +826,12 @@ def writeDirSector(unit, trk, sec, data):
 
     if 'trans' in unit_info[unit]:
         sec = unit_info[unit]['trans'].index(sec)
+    else:
+        sec = sec - 1
 
+    numRec = dpb['blksize'] // SEC_SZ
     sec = (trk - dpb['offset']) * dpb['sectors'] + sec
-    blk = sec // 8
+    blk = sec // numRec
 
     # DIRECTORY
     if sec < ((dpb['dirsize'] * EXT_SZ) // SEC_SZ):
@@ -806,7 +847,7 @@ def writeDirSector(unit, trk, sec, data):
                     fn[1] = fn[1].strip()
                     fn = '.'.join(fn)
 
-                    pos = (sec - (dir[u][f]['data'][0] * 8)) * SEC_SZ
+                    pos = (sec - (dir[u][f]['data'][0] * numRec)) * SEC_SZ
                     info(f"WRITE TO FILE BLOCK: {trk}:{sec} block:{blk} in file: {fn} pos: {pos}")
                     dispDirSector(unit, trk, sec, 'W', f"{u:X}", f"{u}: {fn}")
 
@@ -880,9 +921,12 @@ def readDirSector(unit, trk, sec):
 
     if 'trans' in unit_info[unit]:
         sec = unit_info[unit]['trans'].index(sec)
+    else:
+        sec = sec - 1
 
+    numRec = dpb['blksize'] // SEC_SZ
     sec = (trk - dpb['offset']) * dpb['sectors'] + sec
-    blk = sec // 8
+    blk = sec // numRec
 
     # DIRECTORY
     if sec < ((dpb['dirsize'] * EXT_SZ) // SEC_SZ):
@@ -904,7 +948,7 @@ def readDirSector(unit, trk, sec):
                     fn[1] = fn[1].strip()
                     fn = '.'.join(fn)
 
-                    pos = (sec - (dir[u][f]['data'][0] * 8)) * SEC_SZ
+                    pos = (sec - (dir[u][f]['data'][0] * numRec)) * SEC_SZ
                     info(f"READ FILE BLOCK: {trk}:{sec} block:{blk} in file: {fn} pos: {pos}")
                     dispDirSector(unit, trk, sec, 'R', f"{u:X}", f"{u}: {fn}")
 
@@ -986,7 +1030,7 @@ def disk_io(addr):
 
 if __name__ == "__main__":
     try:
-        logging.basicConfig(filename="trace.log", filemode="w", level=logging.WARNING)
+        logging.basicConfig(filename="trace.log", filemode="w", level=logging.INFO)
         curses.wrapper(main)
         # main(None)
     except KeyboardInterrupt:
