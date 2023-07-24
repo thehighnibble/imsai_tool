@@ -23,14 +23,18 @@
 import sys
 import os
 from stat import *
+from logging import debug, info, error, warning
+import logging
+
 
 DEL_BYTE = 0xE5
+EOF_BYTE = 0x1A
 EXT_SZ = 32
 SEC_SZ = 128
 
-trans = [ 1,7,13,19,25,5,11,17,23,3,9,15,21,2,8,14,20,26,6,12,18,24,4,10,16,22 ]
+trans8 = [ 1,7,13,19,25,5,11,17,23,3,9,15,21,2,8,14,20,26,6,12,18,24,4,10,16,22 ]
 
-dpb = { 
+dpb8 = { 
     'sectors': 26,
     'blksize': 1024,
     'dirsize': 64,
@@ -39,14 +43,22 @@ dpb = {
     'tracks': 77
 }
 
+dpbHD = { 
+    'sectors': 128,
+    'blksize': 2048,
+    'dirsize': 1024,
+    'disksize': 2040,
+    'offset': 0,
+    'tracks': 255
+}
+
 
 # PARSE DIRECTORY EXTENTS INTO dir ARRAY OF DICTIONARIES ie. USER:FILE.EXT
-def parseDir(dirData):
+def parseDir(dirData, blkMode):
 
-    # dir = [ {} ] * 16
-    dir = [ {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {} ]
+    dir = [ {} for _ in range(16) ]
 
-    for d in range(dpb['dirsize']):
+    for d in range(len(dirData) // EXT_SZ):
 
         dirExt = dirData[ d * EXT_SZ : (d + 1) * EXT_SZ ]
 
@@ -63,18 +75,25 @@ def parseDir(dirData):
         bc = dirExt[ 13 ]
         xh = dirExt[ 14 ]
         rc = dirExt[ 15 ]
-        blocks = dirExt[ 16 : 32 ]
 
         blkcount = 0
+        if blkMode:
+            blocks = []
+            for b in range(0, 16, 2):
+                bp = dirExt[ 16 + b ] | (dirExt[ 17 + b ] << 8)
+                if bp:
+                    blkcount += 1
+                blocks.append(bp)
+        else:
+            blocks = dirExt[ 16 : 32 ]
+            for a in range(16):
+                if dirExt[ 16 + a ]:
+                    blkcount += 1
 
-        for a in range(16):
-            if dirExt[ 16 + a ]:
-                blkcount += 1
+        # print(f'Entry: {d:02} User: {user:02X} Filename: {filename} Ext(xl:xh): {xl:02X}:{xh:02X} Len(bc:rc): {bc}:{rc} Bps: {list(blocks)}')
 
-        # print(f'Entry: {d:02} User: {user:02X} Filename: {filename} Ext(xl:xh): {xl:02X}:{xh:02X} Len(bc:rc): {bc}:{rc} Bps: {blkcount}')
-        
         if user != DEL_BYTE:
-            # print(f'Entry: {d:02} User: {user:02X} Filename: {filename} Ext(xl:xh): {xl:02X}:{xh:02X} Len(bc:rc): {bc}:{rc} Bps: {blkcount}')
+            # print(f'Entry: {d:02} User: {user:02X} Filename: {filename} Ext(xl:xh): {xl:02X}:{xh:02X} Len(bc:rc): {bc}:{rc} Bps: {list(blocks)}')
 
             if dir[user].get(filename) == None:
                 dir[user][filename] = { 'blocks': 0, "recs": 0, "data": [] }
@@ -86,7 +105,7 @@ def parseDir(dirData):
 
 
 # PRINT DIRECTORY
-def printDir(dir):
+def printDir(dir, blksize):
     for u in range(16):
         if dir[u] != {}:
             print()
@@ -95,11 +114,12 @@ def printDir(dir):
             print('Name         Bytes   Recs')
             print('------------ ------ ------')
             for f in dir[u]:
-                print(f"{f} {((dir[u][f]['blocks'] * dpb['blksize'])//1024):5}K {dir[u][f]['recs']:5}")
+                size = dir[u][f]['blocks']*(blksize//1024)
+                print(f"{f} {size:5}K {dir[u][f]['recs']:5}")
 
 
 # FORMAT AN EMPTY DISK IMAGE
-def formatImage(name):
+def formatImage(name, dpb):
 
     try:
         disk = open(name, 'xb')
@@ -115,23 +135,47 @@ def formatImage(name):
     disk.close()
 
 
-def main():
+def shorten(name, list):
 
-    args = sys.argv[1:]
-    print (args)
+    tx = str.maketrans("<>.,;:=?*[]%|()/\\_", "                  ")
 
-    root = args[0] + '.unpacked'
+    f, e = os.path.splitext(name)
+
+    file = f.upper().translate(tx).replace(' ', '')
+    ext = '.' + e[1:].upper().translate(tx).replace(' ', '')
+
+    tail = 0
+
+    if len(file) > 8:
+        tail += 1
+        file = f"{file[0:6]}~{tail:X}"
+    ext = ext[0:4]
+
+    shortname = file + ext
+
+    while tail and (shortname in list) and tail < 15:
+        tail += 1
+        shortname = f"{file[0:7]}{tail:X}{ext}"
+    
+    if tail == 16:
+        error(f'TOO MANY FILES WITH THE SAME SHORT NAME: {shortname}')
+
+    if shortname != name:
+        list[list.index(name)] = shortname
+
+    return shortname
+
+
+def build_directory(root, dpb):
+
+    boot = False
+    dirdata = [ DEL_BYTE ] * (EXT_SZ * dpb['dirsize'])
 
     d = os.scandir(root)
 
-    dirdata = [ DEL_BYTE ] * (EXT_SZ * dpb['dirsize'])
     dirI = 0
-    boot = False
-    # blkN = 2 # CALCULATE BASED ON dirsize
     blkN = (EXT_SZ * dpb['dirsize']) // dpb['blksize']
 
-    # print(len(dirdata))
-    
     for i in d:
         s = i.stat().st_size
         if S_ISREG(i.stat().st_mode):
@@ -142,77 +186,99 @@ def main():
             else:
                 outcome = '<IGNORED>'
 
-            print(f"{i.name:12} {s:6} {s//1024:5} {s//128:5} {outcome}")
+            info(f"{i.name:12} {s:6} {s//1024:5} {s//128:5} {outcome}")
             
         if S_ISDIR(i.stat().st_mode):
 
-            if f"{int(i.name)}" == i.name and int(i.name) in range(16):
+            if i.name.isnumeric() and int(i.name) in range(16):
                 outcome = f'USER: {i.name}'
             else:
                 outcome = '<IGNORED>'
+                info(f"{i.name:12} <DIR> {outcome}")
+                continue
 
-            print(f"{i.name:12} <DIR> {outcome}")
+            info(f"{i.name:12} <DIR> {outcome}")
 
-            subd = os.path.join(root, i.name)
-            sd = os.scandir(subd)
+            files = list(os.scandir(os.path.join(root, i.name)))
+            names = [ f.name for f in files ]
 
-            for f in sd:
+            for f in files:
+
                 size = f.stat().st_size
-                if S_ISREG(f.stat().st_mode):
+                mode = f.stat().st_mode
+                name = shorten(f.name, names)
 
-                    n = f.name.split('.')
-                    cpmfile = f'{n[0]:8}'
-                    cpmext = f'{n[1]:3}'
+                if name != f.name:
+                    try:
+                        os.rename(os.path.join(root, i.name, f.name), os.path.join(root, i.name, name))
+                        warning(f'RENAMED FILE: {f.name} to {name}')
+                    except:
+                        error(f"FAILED TO RENAME {f.name} to {name}")
 
-                    print(f"{cpmfile}.{cpmext} {size:6} {size//1024:5} {size//128:5}")
+                if S_ISREG(mode):
+
+                    f, e = os.path.splitext(name)
+                    cpmfile = f'{f:8}'
+                    cpmext = f'{e[1:]:3}'
+
+                    info(f"{cpmfile}.{cpmext} {size:6} {size//1024:5} {size//128:5}")
 
                     ext = [0] * 32
 
                     ext[0] = int(i.name)
 
-                    for m in range(8):
-                        ext[m + 1] = ord(cpmfile[m])
+                    ext[1:9] = [ord(c) for c in cpmfile]
+                    ext[9:12] = [ord(c) for c in cpmext]
 
-                    for n in range(3):
-                        ext[n + 9] = ord(cpmext[n])
-
-                    # XL - extent number
-                    xl = 0
+                    # XL - extent number bits 0-4
+                    # XH - extent number bits 5-10
+                    xNum = 0
 
                     # BC - always ZERO for CPM22 - ignore
 
-                    # XH - always ZERO for CPM22 (?) - ignore
-
                     # RC - number of recs/secs in the extent
-                    rc = size // SEC_SZ
+                    # round up if not a full sector (even multiple)
+                    rc = size // SEC_SZ + ( 1 if (size % SEC_SZ) else 0)
 
                     while rc >= 0:
                         nextext = list(ext)
-                        nextext[12] = xl
+                        nextext[12] = xNum & 0x1F
                         # nextext[13] = 0
-                        # nextext[14] = 0
+                        nextext[14] = xNum >> 5
                         nextext[15] = rc if rc <= 128 else 128
 
                         ### ADD BLOCK POINTERS HERE
-                        bc = (nextext[15] // 8) + (1 if (nextext[15] % 8) else 0)
+                        numRec = dpb['blksize'] // SEC_SZ
+                        bc = (nextext[15] // numRec) + (1 if (nextext[15] % numRec) else 0)
 
                         for b in range(bc):
-                            nextext[16 + b] = blkN
+                            if dpb['disksize'] > 255:
+                                nextext[16 + b*2] = blkN & 0xFF
+                                nextext[17 + b*2] = blkN >> 8
+                            else:
+                                nextext[16 + b] = blkN
+
                             blkN += 1
-                        
-                        # print(nextext)
+
+                        # debug(nextext)
 
                         for d in range(EXT_SZ):
-                            dirdata[(dirI + d)] = nextext[d]
+                            dirdata[(dirI * EXT_SZ + d)] = nextext[d]
                         
-                        dirI += EXT_SZ
+                        dirI += 1
 
-                        xl += 1
+                        xNum += 1
                         rc -= 128
 
-    formatImage(args[0] + '.dsk')
+    return ( boot, bytearray(dirdata) )
 
-    disk = open(args[0] + '.dsk', 'r+b')
+
+def writeImage(name, boot, dirdata, dpb, trans):
+
+    root, ext = os.path.splitext(name)
+    root += '.unpacked'
+
+    disk = open(name , 'r+b')
 
     #WRITE BOOT TRACKS
     if boot:
@@ -228,14 +294,17 @@ def main():
         trk = sd // dpb['sectors']
         sec = sd % dpb['sectors']
         
-        tb = trans[sec] - 1
+        if trans != 0:
+            tb = trans[sec] - 1
+        else:
+            tb = sec
+
         loc = (((dpb['offset'] + trk) * dpb['sectors']) + tb) * SEC_SZ
         disk.seek(loc)
         disk.write(bytearray(dirdata[sd * SEC_SZ : (sd+1) * SEC_SZ]))
 
-
-    dir = parseDir(bytearray(dirdata))
-    printDir(dir)
+    dir = parseDir(bytearray(dirdata), 1 if dpb['disksize'] > 255 else 0)
+    printDir(dir, dpb['blksize'])
 
     #WRITE DATABLOCKS - MUST BE SECTOR BY SECTOR
     for u in range(16):
@@ -254,15 +323,20 @@ def main():
                 for b in dir[u][f]['data']:
 
                     if b > 0:
-                        r = 8 if recs > 8 else recs
+                        numRec = dpb['blksize'] // SEC_SZ
+                        r = numRec if recs > numRec else recs
                         recs -= r
 
                         for s in range(r):
-                            sec = b * 8 + s
+                            sec = b * numRec + s
                             trk = sec // dpb['sectors']
                             sec = sec % dpb['sectors']
                             
-                            tb = trans[sec] - 1
+                            if trans:
+                                tb = trans[sec] - 1
+                            else:
+                                tb = sec
+
                             loc = (((dpb['offset'] + trk) * dpb['sectors']) + tb) * SEC_SZ
                             disk.seek(loc)
                             file.seek(fsec * SEC_SZ)
@@ -272,17 +346,45 @@ def main():
 
                             fsec += 1
 
-                        # print(f"File: {f} Block: {b} Trk: {trk:02} Sec: {sec:02} Recs: {recs} Len: {len(data)}")
+                        # debug(f"File: {f} Block: {b} Trk: {trk:02} Sec: {sec:02} Recs: {recs} Len: {len(data)}")
 
                 file.close()
 
     disk.close()
 
+
+def main():
+
+    args = sys.argv[1:]
+    print (args)
+
+    file, ext = os.path.splitext(args[0])
+
+    if ext == '.hdd':
+        dpb = dpbHD
+        trans = 0
+    elif ext == '.dsk':
+        dpb = dpb8
+        trans = trans8
+
+    else:
+        sys.exit(f'UNKNOWN IMAGE TYPE: {ext} FOR FILE {file + ext}')
+      
+
+    (boot, dirdata) = build_directory(file + '.unpacked', dpb)
+
+    formatImage(file + ext, dpb)
+
+    writeImage(file + ext, boot, dirdata, dpb, trans)
+
+
 if __name__ == "__main__":
     try:
+        # logging.basicConfig(filename="trace.log", filemode="w", level=logging.INFO)
+        logging.basicConfig(level=logging.INFO)
         main()
     except KeyboardInterrupt:
         # do nothing here
-        print("KEY INT")
+        info("KEY INT")
         pass
 
