@@ -32,7 +32,7 @@ import curses.textpad
 import sys
 import os
 import socket
-from simple_http_server import route, server, Response, ModelDict, logger as httpdlog
+from simple_http_server import route, server, Response, BytesBody, logger as httpdlog
 from threading import Thread
 from logging import debug, info, error, warning
 import logging
@@ -60,7 +60,9 @@ orientation = "PORTRAIT"
 line = 0
 lines = 0
 pages = 0
-
+paper = ""
+stock = ""
+stocks = [ 'blue', 'green', 'white' ]
 
 def main(sc):
 
@@ -97,9 +99,27 @@ def main(sc):
     global pdf, tf
     global mode, file, orientation
     global line, lines, pages
+    global paper, stock
+
+    args = sys.argv[1:]
+    info(f"Args: {args} [{len(args)}]")
+
+    if "-P" in args:
+        mode = 'pdf'
+        i = args.index("-P")
+        info(f"PDF: selected")
+        if len(args) > i + 1:
+            if args[i+1] in stocks:
+                stock = args[i+1]
+                info(f"Paper color: {stock} selected")
 
     if mode == 'pdf':
         pdf = FPDF()
+        # pdf.add_font(family='Menlo', fname='/Volumes/Macintosh HD/System/Library/Fonts/Menlo.ttc')
+        # pdf.set_font('Menlo')
+        if stock in stocks:
+            paper = f"{'letter' if orientation[0]=='P' else 'wide'}_{stock}"
+            pdf.set_page_background('paper/' + paper + '.svg')
     else:
         tf = open(file + '.txt', "w")
         tf.close()
@@ -137,6 +157,9 @@ def main(sc):
                         pdf.cell(txt="".join(linebuf[0:lineLength]))
                     pdf.output(file + '.pdf')
                     pdf = FPDF()
+                    if stock in stocks:
+                        paper = f"{'letter' if orientation[0]=='P' else 'wide'}_{stock}"
+                        pdf.set_page_background('paper/' + paper + '.svg')
                 else:
                     if len(linebuf) > 0:
                         tf = open(file + '.txt', "a")
@@ -163,11 +186,11 @@ def main(sc):
 
 
 @route(f'/{SRV_PATH}', method="PUT")
-def io_out(p, m=ModelDict()):
+def io_out(p, b=BytesBody()):
     port = int(p, 16)
-    #BODY is a little hard to get as it ends up as the first KEY in the DICT m
-    data = int(next(iter(m)), 16) 
-    # info(f'{port:02X} {data:02X}')
+    data = bytearray(b)
+    debug(f'{port:02X} {len(data):02X} {data}')
+
     if port == LPT_PORT:
         t = lpt_out(data)
 
@@ -183,7 +206,7 @@ def connect_to_host():
             info(f'De-registered on {sys_get.text}')
             win.addnstr(0, 0, f'De-registered on {sys_get.text}', TMAX)
 
-        sys_get = requests.patch(f'{hosturl}/io?p=-{LPT_PORT:02X}&b=0xFF&t=0x0D', data=_srvurl)
+        sys_get = requests.patch(f'{hosturl}/io?p=-{LPT_PORT:02X}&b=0xFF&t=0x0A', data=_srvurl)
         if sys_get.status_code == 200:
             info(f'Listening and registered on Port {LPT_PORT:02X}h to {sys_get.text}')
             win.addnstr(0, 0, f'Listening and registered on Port {LPT_PORT:02X}h to {sys_get.text}', TMAX, GREEN)
@@ -201,11 +224,12 @@ def lpt_out(data):
     win.clrtoeol()
     win.refresh()
 
-    ch = chr(data)
-    if mode == 'pdf':
-        pdfPrint(ch)
-    else:
-        textPrint(ch)
+    for d in data:
+        ch = chr(d)
+        if mode == 'pdf':
+            pdfPrint(ch)
+        else:
+            textPrint(ch)
 
     updateStats()
 
@@ -217,7 +241,7 @@ def updateStats():
 
     win.addstr(2, 0, f"Mode: {mode.upper()}  File: {file + '.' + mode}")
     win.clrtoeol()
-    win.addstr(3, 0, f'Orientation: {orientation}  Size: A4')
+    win.addstr(3, 0, f"Orientation: {orientation}  Size: {'Letter' if orientation[0]=='P' else 'Wide'}")
     win.clrtoeol()
     win.addstr(4, 0, f'Pages: {pages}  Lines: {lines}')
     win.clrtoeol()
@@ -229,24 +253,29 @@ lpos = 0
 linebuf = []
 pageLength = 66
 lineLength = 80
+lineSpacing = 0
 
 def pdfPrint(ch):
     
-    global lpos, line, lines, pages, lineLength
+    global lpos, line, lines, pages, lineLength, lineSpacing
 
     if line == 0:
         if orientation == 'PORTRAIT':
-            pdf.add_page(orientation=orientation[0])
-            pdf.set_margin(2.5)
+            pdf.add_page(orientation=orientation[0], format=(8.5 * 25.4, 11 * 25.4))
+            pdf.set_margin(0.0)
+            pdf.set_left_margin(0.0 * 25.4)
+            pdf.set_char_spacing(0.3)
+
             pdf.set_font('Courier', size=12)
             lineLength = 80
-            linespacing = 0
+            lineSpacing = 0
         else: 
-            pdf.add_page(orientation=orientation[0])
-            pdf.set_margin(2.5)
-            pdf.set_font('Courier', size=9)
+            pdf.add_page(orientation=orientation[0], format=(11 * 25.4, 14 * 25.4))
+            pdf.set_margin(0.0)
+            pdf.set_char_spacing(0.31)
+            pdf.set_font('Courier', size=12)
             lineLength = 132
-            lineSpacing = 3.1
+            lineSpacing = 0
 
         pages += 1
         line += 1
