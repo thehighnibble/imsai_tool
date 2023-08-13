@@ -41,7 +41,7 @@ httpdlog.set_level("ERROR")
 srv = os.path.splitext(os.path.basename(sys.argv[0]))[0]
 
 FIF_PORT = 0xFD
-SRV_PORT = 3000
+SRV_PORT = 3000 + FIF_PORT
 SRV_PATH = srv
 
 hosturl = 'http://imsai8080'
@@ -59,6 +59,21 @@ win = None
 
 
 def main(sc):
+
+    curses.init_pair(1, curses.COLOR_RED, curses.COLOR_BLACK)
+    curses.init_pair(2, curses.COLOR_GREEN, curses.COLOR_BLACK)
+    curses.init_pair(3, curses.COLOR_YELLOW, curses.COLOR_BLACK)
+    curses.init_pair(4, curses.COLOR_CYAN, curses.COLOR_BLACK)
+
+    global RED
+    global GREEN
+    global YELLOW
+    global CYAN
+
+    RED = curses.color_pair(1)
+    GREEN = curses.color_pair(2)
+    YELLOW = curses.color_pair(3)
+    CYAN = curses.color_pair(4)
 
     global win
     curses.curs_set(0)
@@ -82,7 +97,7 @@ def main(sc):
 
     while True:
         key = win.getkey()
-        win.addstr(curses.LINES - 3, 1, f"KEY: <{key}>")
+        win.addstr(curses.LINES - 3, 1, f"KEY: <{key}>", CYAN)
         win.clrtoeol()
         win.refresh()
 
@@ -150,8 +165,8 @@ def connect_to_host():
         sys_get = requests.patch(f'{hosturl}/io?p=-{FIF_PORT:02X}', data=_srvurl)
         if sys_get.status_code == 200:
             info(f'Listening and registered on Port {FIF_PORT:02X}h to {sys_get.text}')
-            win.addnstr(0, 0, f'Listening and registered on Port {FIF_PORT:02X}h to {sys_get.text}', TMAX)
-            win.addnstr(1, 0, f'***You must COLD BOOT the IMSAI to recognize the remote FIF***', TMAX)
+            win.addnstr(0, 0, f'Listening and registered on Port {FIF_PORT:02X}h to {sys_get.text}', TMAX, GREEN)
+            win.addnstr(1, 0, f'***You must COLD BOOT the IMSAI to recognize the remote FIF***', TMAX, YELLOW)
             win.refresh()
     except:
         sys.exit(f"FAILED to find {hosturl} - not connected")
@@ -168,7 +183,7 @@ def fif_out(data):
 
     res = 0
 
-    win.addstr(2, 0, 'RECV', curses.A_REVERSE)
+    win.addstr(2, 0, 'RECV', curses.A_REVERSE + RED)
     win.refresh()
 
     if fdstate == 0:
@@ -307,7 +322,7 @@ def process_diskmap():
         unit_info[disk_to_unit[d]]['scale'] = tscale
 
         win.addstr(4*i + 3, 0, f"DSK:{d}: =  {unit_info[disk_to_unit[d]]['type']}:{unit_info[disk_to_unit[d]]['file']}")
-        win.addstr(4*i + 3, 35, f"Login/Warm boot to reload disk")
+        win.addstr(4*i + 3, 35, f"Login/Warm boot to reload disk", curses.A_DIM + YELLOW)
         win.hline(4*i + 4, 0, '.', unit_info[disk_to_unit[d]]['dpb']['tracks'] >> tscale)
         if tscale:
             win.addstr(4*i + 4, (unit_info[disk_to_unit[d]]['dpb']['tracks'] >> tscale), f' [x{1 << tscale}]')
@@ -791,8 +806,8 @@ def dispDirSector(unit, trk, sec, mode, type, desc):
     win.addstr(4*i + 4, unit_info[unit]['last'] >> tscale, '.')
     win.addstr(4*i + 5, unit_info[unit]['last'] >> tscale, ' ')
     unit_info[unit]['last'] = trk
-    win.addstr(4*i + 4, trk >> tscale, mode)
-    win.addstr(4*i + 5, trk >> tscale, type)
+    win.addstr(4*i + 4, trk >> tscale, mode, curses.A_BOLD)
+    win.addstr(4*i + 5, trk >> tscale, type, curses.A_BOLD)
     win.addstr(4*i + 6, 0, desc)
     win.clrtoeol()
     win.refresh()
