@@ -30,7 +30,7 @@ import sys
 import os
 from stat import *
 import socket
-from simple_http_server import route, server, Response, ModelDict, logger as httpdlog
+from simple_http_server import route, server, Response, BytesBody, ModelDict, logger as httpdlog
 from threading import Thread
 from logging import debug, info, error, warning
 import logging
@@ -142,13 +142,25 @@ def main(sc):
         
 
 @route(f'/{SRV_PATH}', method="PUT")
-def io_out(p, m=ModelDict()):
+def io_out_put(p, m=ModelDict()):
     port = int(p, 16)
     #BODY is a little hard to get as it ends up as the first KEY in the DICT m
     data = int(next(iter(m)), 16) 
     # info(f'{port:02X} {data:02X}')
     if port == FIF_PORT:
         t = fif_out(data)
+
+        if t == 1:
+            return Response(status_code=201)
+    return #normal 200 response 
+
+@route(f'/{SRV_PATH}', method="POST")
+def io_out_post(p, b=BytesBody()):
+    port = int(p, 16)
+    data = bytearray(b) 
+    info(f'{port:02X} {data}')
+    if port == FIF_PORT:
+        t = fif_with_dma(data)
 
         if t == 1:
             return Response(status_code=201)
@@ -162,7 +174,8 @@ def connect_to_host():
         win.addnstr(0, 0, f'De-registered on {sys_get.text}', TMAX)
 
     try:
-        sys_get = requests.patch(f'{hosturl}/io?p=-{FIF_PORT:02X}', data=_srvurl)
+        sys_get = requests.patch(f'{hosturl}/io?p=-{FIF_PORT:02X}&b=0x0F', data=_srvurl)
+        # sys_get = requests.patch(f'{hosturl}/io?p=-{FIF_PORT:02X}', data=_srvurl)
         if sys_get.status_code == 200:
             info(f'Listening and registered on Port {FIF_PORT:02X}h to {sys_get.text}')
             win.addnstr(0, 0, f'Listening and registered on Port {FIF_PORT:02X}h to {sys_get.text}', TMAX, GREEN)
@@ -174,6 +187,33 @@ def connect_to_host():
 fdstate = 0
 descno = 0
 fdaddr = [0] * 16
+
+def fif_with_dma(mem):
+
+    global descno
+    global fdstate
+    global fdaddr
+
+    res = 0
+
+    win.addstr(2, 0, 'RECV', curses.A_REVERSE + GREEN)
+    win.refresh()
+
+    descno = mem[9]
+    fdaddr[descno] = (mem[8] << 8) + mem[7]
+
+    win.addstr(1, 0, f"FIF DESC:{descno:X}")
+    win.clrtoeol()
+    win.move(2,4)
+    win.clrtoeol()
+    for i in range(16):
+        win.addstr((i//8) + 1, (i%8) * 7 + 12, f"{i:X}:{fdaddr[i]:04X}", curses.A_BOLD if i == descno else curses.A_NORMAL)
+
+    res = disk_io_action(mem, fdaddr[descno])
+
+    win.addstr(2, 0, '    ')
+    win.refresh()
+    return res
 
 def fif_out(data):
 
@@ -993,6 +1033,10 @@ def readDirSector(unit, trk, sec):
 def disk_io(addr):
     dma_get = sess.get(f'{hosturl}/dma?m={addr:04X}&n=7')
     mem = dma_get.content
+    return disk_io_action(mem, addr)
+
+
+def disk_io_action(mem, addr):
 
     unit = mem[0] & 0x0F
     cmd = mem[0] >> 4
