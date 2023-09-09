@@ -291,7 +291,9 @@ def pdfPrint(ch):
     elif ord(ch) == 13: # <CR>
         lpos = 0
     elif ord(ch) == 10: # <LF>
-        pdf.cell(txt="".join(linebuf[0:lineLength]))
+        text = "".join(linebuf[0:lineLength])
+        if text:
+            pdf.cell(txt=text)
         if lineSpacing > 0:
             pdf.ln(lineSpacing)
         else:
